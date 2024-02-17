@@ -37,7 +37,11 @@ class Constraint(Expression):
 
   def eval(self, p: Mapping[str, float], t: np.ndarray = None) -> float:
     # restrict parameter dictionary to only the declared dependent parameters
-    return self.constraint({key: p[key] for key in self.parameters})
+    try:
+      return self.constraint({key: p[key] for key in self.parameters})
+    except KeyError as error:
+      error.add_note("Constraint cannot use undeclared parameter.")
+      raise
 
 # =================================================================================================
 
