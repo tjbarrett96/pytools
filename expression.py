@@ -61,16 +61,16 @@ class Expression:
 
   # ===============================================================================================
   
-  def eval(self, t: np.ndarray, p: dict[str, float]) -> np.ndarray:
+  def eval(self, p: dict[str, float], t: np.ndarray) -> np.ndarray | float:
     """Evaluate expression from global parameter dictionary using this expression's known parameter names."""
     return self._function(t, *(p[name] for name in self.parameters))
 
   # ===============================================================================================
 
   # delegate calling to self.eval, which can be changed dynamically (unlike special __call__ method)
-  def __call__(self, t: np.ndarray, p: dict[str, float]) -> np.ndarray:
+  def __call__(self, p: dict[str, float], t: np.ndarray = None) -> np.ndarray | float:
     """Evaluate expression from global parameter dictionary using this expression's known parameter names."""
-    return self.eval(t, p)
+    return self.eval(p, t)
 
   # ===============================================================================================
 
@@ -87,7 +87,7 @@ class Expression:
   def __add__(self, other: Self) -> Self:
     """Construct new Expression which returns the sum of this Expression and another."""
     result = self._merge_skeleton(other)
-    result.eval = lambda t, p: self(t, p) + other(t, p)
+    result.eval = lambda p, t: self(p, t) + other(p, t)
     return result
 
   # ===============================================================================================
@@ -95,7 +95,7 @@ class Expression:
   def __mul__(self, other: Self) -> Self:
     """Construct new Expression which returns the product of this Expression and another."""
     result = self._merge_skeleton(other)
-    result.eval = lambda t, p: self(t, p) * other(t, p)
+    result.eval = lambda p, t: self(p, t) * other(p, t)
     return result
 
 # =================================================================================================

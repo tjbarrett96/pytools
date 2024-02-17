@@ -27,7 +27,6 @@ class Data:
 # in terms of those parameters. Used to constrain one parameter in terms of others.
 ConstraintFunction = Callable[[Mapping[str, float]], float]
 
-# TODO: maybe switch order of Expression parameters to (p, t = None) so that t optional for constraint-type Expressions
 class Constraint(Expression):
   """Simple container which wraps a constraint function alongside a list declaring the dependent parameters."""
 
@@ -36,12 +35,9 @@ class Constraint(Expression):
     self.parameters = {parameter: None for parameter in parameters}
     self.constraint = constraint
 
-  def eval(self, p: Mapping[str, float]) -> float:
+  def eval(self, p: Mapping[str, float], t: np.ndarray = None) -> float:
     # restrict parameter dictionary to only the declared dependent parameters
     return self.constraint({key: p[key] for key in self.parameters})
-  
-  def __call__(self, t: np.ndarray, p: Mapping[str, float]) -> float:
-    return self.eval(p)
 
 # =================================================================================================
 
@@ -233,24 +229,24 @@ class HybridFit:
 
   # ===============================================================================================
 
-  def __call__(self, t: np.ndarray, p: Mapping[str, float]) -> np.ndarray:
+  def __call__(self, p: Mapping[str, float], t: np.ndarray) -> np.ndarray:
     """Evaluate the model using the given independent variable and dictionary of parameter values."""
-    return self.scale(t, p) * sum(
-      (p[name] * term(t, p) for name, term in self.terms.items()),
-      self.const(t, p)
+    return self.scale(p, t) * sum(
+      (p[name] * term(p, t) for name, term in self.terms.items()),
+      self.const(p, t)
     )
   
   # ===============================================================================================
 
-  def fit_linear_combination(self, t: np.ndarray, p: Mapping[str, float]) -> dict[str, float]:
+  def fit_linear_combination(self, p: Mapping[str, float], t: np.ndarray) -> dict[str, float]:
     """
     Returns a dictionary of best-fit coefficients for the terms in the linear combination
     which are currently floating.
     """
 
-    scale, const = self.scale(t, p), self._constrained_const(t, p)
+    scale, const = self.scale(p, t), self._constrained_const(p, t)
     coeffs = util.fit_linear_combination(
-      [term(t, p) for term in self._constrained_terms.values()],
+      [term(p, t) for term in self._constrained_terms.values()],
       self.data.y / scale - const, # must remove scale and const models from data to isolate linear combination
       self.data.y_err / scale # dividing by scale model also scales data errorbars, but not subtracting const
     )
@@ -268,23 +264,23 @@ class HybridFit:
     # update nonlinear constrained parameters
     for name, constraint in self._nonlinear_constraints.items():
       if not self.fixed[name]:
-        p[name] = constraint.eval(p)
+        p[name] = constraint(p)
 
     # optimize linear coefficient parameters
     if self._fit_linear:
-      coeffs = self.fit_linear_combination(t, p)
+      coeffs = self.fit_linear_combination(p, t)
       p.update(coeffs)
 
     # update linear constrained parameters
     for name, constraint in self._linear_constraints.items():
       if not self.fixed[name]:
         p[name] = sum(
-          p[linear_param] * coeff_constraint.eval(self.minuit.values)
+          p[linear_param] * coeff_constraint(self.minuit.values)
           for linear_param, coeff_constraint in constraint.items()
         )
     
     # evaluate model with updated parameter dictionary
-    return self(t, p)
+    return self(p, t)
   
   # ===============================================================================================
 
@@ -325,20 +321,20 @@ class HybridFit:
       self.minuit.migrad()
 
       # update linear parameters in minuit results
-      coeffs = self.fit_linear_combination(self.data.x, self.minuit.values)
+      coeffs = self.fit_linear_combination(self.minuit.values, self.data.x)
       if len(coeffs) > 0:
         self.minuit.values[*coeffs.keys()] = coeffs.values()
 
       # update nonlinear constrained parameters in minuit results
       for name, constraint in self._nonlinear_constraints.items():
         if not self.fixed[name]:
-          self.minuit.values[name] = constraint.eval(self.minuit.values)
+          self.minuit.values[name] = constraint(self.minuit.values)
 
       # update linear constrained parameters in minuit results
       for name, constraint in self._linear_constraints.items():
         if not self.fixed[name]:
           self.minuit.values[name] = sum(
-            self.minuit.values[a] * coeff.eval(self.minuit.values)
+            self.minuit.values[a] * coeff(self.minuit.values)
             for a, coeff in constraint.items()
           )
 
