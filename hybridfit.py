@@ -189,7 +189,10 @@ class HybridFit:
       # a_k = a_0 * c_0(n) + a_1 * c_1(n) + ..., where 'n' is the nonlinear parameter system.
       elif (name in self.terms) and isinstance(constraint, dict):
         
-        for linear_param, coefficient in constraint.items():
+        for linear_param in constraint:
+
+          coefficient = HybridFit._ensure_expression(constraint[linear_param])
+          constraint[linear_param] = coefficient
 
           if (linear_param not in self.terms) or (linear_param in self._linear_constraints):
             raise ValueError(f"Parameter '{linear_param}' is not a linear parameter, or is already constrained.")
@@ -197,7 +200,7 @@ class HybridFit:
           if any([dependency in self.terms for dependency in coefficient.parameters]):
             raise ValueError("Coefficient in constrained linear combination may only involve nonlinear parameters.")
           
-          self._linear_constraints[name] = constraint
+        self._linear_constraints[name] = constraint
 
       else:
 

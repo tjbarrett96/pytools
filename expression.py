@@ -23,7 +23,7 @@ class Expression:
 
     # store function for internal use
     if isinstance(function, (np.ndarray, np.number, int, float)):
-      self._function = (lambda t: function * np.ones(len(t)))
+      self._function = (lambda t: function * (np.ones(len(t)) if t is not None else 1))
       signature = {}
     else:
       self._function = function
