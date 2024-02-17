@@ -163,7 +163,7 @@ class HybridFit:
 
   # ===============================================================================================
         
-  def add_constraint(self, constraints: dict[str, Constraint | dict[str, Constraint]]):
+  def constrain(self, constraints: dict[str, Constraint | dict[str, Constraint]]):
     """Constrain given parameters as functions of other unconstrained parameters."""
 
     for name, constraint in constraints.items():
@@ -181,7 +181,7 @@ class HybridFit:
       # Linear parameters may be constrained as linear combinations of other linear parameters,
       # supplied as dict[str, Constraint] which maps each linear parameter name in the combination
       # to a constrained coefficient (which may involve nonlinear parameters).
-      # e.g. self.add_constraint({"a_k": {"a_0": c_0, "a_1": c_1, ...}}) applies the constraint
+      # e.g. self.constrain({"a_k": {"a_0": c_0, "a_1": c_1, ...}}) applies the constraint
       # a_k = a_0 * c_0(n) + a_1 * c_1(n) + ..., where 'n' is the nonlinear parameter system.
       elif (name in self.terms) and isinstance(constraint, dict):
         
@@ -201,7 +201,7 @@ class HybridFit:
 
   # ===============================================================================================
       
-  def remove_constraint(self, *names):
+  def unconstrain(self, *names):
     """Remove any constraint relationships from given parameter names."""
     for name in names:
       if name in self._nonlinear_constraints:
