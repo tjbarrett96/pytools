@@ -27,7 +27,7 @@ class Data:
 # in terms of those parameters. Used to constrain one parameter in terms of others.
 ConstraintFunction = Callable[[Mapping[str, float]], float]
 
-# TODO: make Constraint a subclass of Expression!!!!!! will be called with (t, p) but can just ignore t
+# TODO: maybe switch order of Expression parameters to (p, t = None) so that t optional for constraint-type Expressions
 class Constraint(Expression):
   """Simple container which wraps a constraint function alongside a list declaring the dependent parameters."""
 
@@ -36,9 +36,12 @@ class Constraint(Expression):
     self.parameters = {parameter: None for parameter in parameters}
     self.constraint = constraint
 
-  def eval(self, t: np.ndarray, p: Mapping[str, float]) -> float:
+  def eval(self, p: Mapping[str, float]) -> float:
     # restrict parameter dictionary to only the declared dependent parameters
     return self.constraint({key: p[key] for key in self.parameters})
+  
+  def __call__(self, t: np.ndarray, p: Mapping[str, float]) -> float:
+    return self.eval(p)
 
 # =================================================================================================
 
@@ -121,6 +124,8 @@ class HybridFit:
       name = list(self.parameters.keys())
     )
 
+    # self.minuit.print_level = 2
+
     # apply parameter bounds to minuit
     for name, value in self.bounds.items():
       self.minuit.limits[name] = value
@@ -128,11 +133,10 @@ class HybridFit:
     # fix linear parameters and those with constraints
     for name in self.terms:
       self.minuit.fixed[name] = True
-    # for name in self.constraints:
-    #   self.minuit.fixed[name] = True
 
     # internal tracking of fixed/floating parameters, since floating linear & constrained parameters are treated as 'fixed' by minuit
     self.fixed = {name: False for name in self.parameters}
+    self._fit_linear = True
 
     # covariance matrix of fit parameters
     self.cov = None
@@ -212,6 +216,12 @@ class HybridFit:
         del self._linear_constraints[name]
 
   # ===============================================================================================
+        
+  def is_constrained(self, name):
+    """Checks if the given parameter is currently constrained."""
+    return (name in self._nonlinear_constraints) or (name in self._linear_constraints)
+
+  # ===============================================================================================
 
   @staticmethod
   def _ensure_expression(expr):
@@ -238,17 +248,6 @@ class HybridFit:
     which are currently floating.
     """
 
-    # floating_terms = {
-    #   name: term
-    #   for name, term in self.terms.items()
-    #   if (name not in self.constraints) and (not self.fixed[name]) and (self.minuit.fixed[name])
-    # }
-    
-    # TODO: THIS DOES NOT TAKE INTO ACCOUNT FIXED/CONSTRAINED LINEAR COEFFICIENTS!
-    # TODO: need to enforce certain forms of constraints, i.e. linear parameter -> linear combination of other linear parameters (w/ nonlinear parameters in coeffs and const)
-    #                                                          nonlinear parameter -> only other nonlinear parameters
-    # TODO: make form of constraint function declare the parameter parameters. then they can be validated, and supplied dictionary restricted only to allowed parameters.
-    #       make simple Constraint class which holds parameters & constraint function, e.g. Constraint(["p0", "p1", ...], lambda p: f(p)), where 'p' will be restricted to declared dependent variables only
     scale, const = self.scale(t, p), self._constrained_const(t, p)
     coeffs = util.fit_linear_combination(
       [term(t, p) for term in self._constrained_terms.values()],
@@ -269,17 +268,18 @@ class HybridFit:
     # update nonlinear constrained parameters
     for name, constraint in self._nonlinear_constraints.items():
       if not self.fixed[name]:
-        p[name] = constraint(p)
+        p[name] = constraint.eval(p)
 
     # optimize linear coefficient parameters
-    coeffs = self.fit_linear_combination(t, p)
-    p.update(coeffs)
+    if self._fit_linear:
+      coeffs = self.fit_linear_combination(t, p)
+      p.update(coeffs)
 
     # update linear constrained parameters
     for name, constraint in self._linear_constraints.items():
       if not self.fixed[name]:
         p[name] = sum(
-          p[linear_param] * coeff_constraint(self.minuit.values)
+          p[linear_param] * coeff_constraint.eval(self.minuit.values)
           for linear_param, coeff_constraint in constraint.items()
         )
     
@@ -318,31 +318,44 @@ class HybridFit:
         # remove constrained parameter from the constrained linear system
         del self._constrained_terms[name]
 
-    self.minuit.migrad()
+    iterations = 0
+    success = False
+    while not success and iterations < 2:
 
-    # update linear parameters in minuit results
-    coeffs = self.fit_linear_combination(self.data.x, self.minuit.values)
-    if len(coeffs) > 0:
-      self.minuit.values[*coeffs.keys()] = coeffs.values()
+      self.minuit.migrad()
 
-    # update nonlinear constrained parameters in minuit results
-    for name, constraint in self._nonlinear_constraints.items():
-      if not self.fixed[name]:
-        self.minuit.values[name] = constraint(self.minuit.values)
+      # update linear parameters in minuit results
+      coeffs = self.fit_linear_combination(self.data.x, self.minuit.values)
+      if len(coeffs) > 0:
+        self.minuit.values[*coeffs.keys()] = coeffs.values()
 
-    # update linear constrained parameters in minuit results
-    for name, constraint in self._linear_constraints.items():
-      if not self.fixed[name]:
-        self.minuit.values[name] = sum(
-          self.minuit.values[a] * coeff(self.minuit.values)
-          for a, coeff in constraint.items()
-        )
+      # update nonlinear constrained parameters in minuit results
+      for name, constraint in self._nonlinear_constraints.items():
+        if not self.fixed[name]:
+          self.minuit.values[name] = constraint.eval(self.minuit.values)
 
-    # release floating linear parameters in minuit system, call HESSE, then re-fix them
-    floating_coeffs = [name for name in self._constrained_terms if not self.fixed[name]]
-    self.minuit.fixed[*floating_coeffs] = False
-    self.minuit.hesse()
-    self.minuit.fixed[*floating_coeffs] = True
+      # update linear constrained parameters in minuit results
+      for name, constraint in self._linear_constraints.items():
+        if not self.fixed[name]:
+          self.minuit.values[name] = sum(
+            self.minuit.values[a] * coeff.eval(self.minuit.values)
+            for a, coeff in constraint.items()
+          )
+
+      # release floating linear parameters in minuit system, call HESSE, then re-fix them
+      floating_coeffs = [name for name in self._constrained_terms]
+      self.minuit.fixed[*floating_coeffs] = False
+      self._fit_linear = False
+      self.minuit.hesse()
+      self.minuit.fixed[*floating_coeffs] = True
+      self._fit_linear = True
+
+      # re-evaluate EDM after calling HESSE
+      if self.minuit.fmin.edm > self.minuit.fmin.edm_goal:
+        print(f"After HESSE, updated EDM exceeds target for convergence. Repeating minimization.")
+        iterations += 1
+      else:
+        success = True
 
     self.cov = np.array(self.minuit.covariance)
     self.errors = self.minuit.errors.to_dict()
@@ -361,10 +374,13 @@ class HybridFit:
   def print(self):
     """Prints fit convergence status/warnings, table of parameter information, and chi-squared/p-value."""
 
+    print()
     success = True
     if not self.minuit.fmin.is_valid:
       print("MINIMIZATION DID NOT CONVERGE!")
       success = False
+      if self.minuit.fmin.edm > self.minuit.fmin.edm_goal:
+        print(f"EDM (chi2 - chi2_min) ~ {self.minuit.fmin.edm:.4f} exceeds EDM goal of {self.minuit.fmin.edm_goal:.4f}.")
     if not self.minuit.fmin.has_accurate_covar:
       print("Covariance may not be accurate.")
       success = False
@@ -376,6 +392,7 @@ class HybridFit:
       success = False
     if success:
       print("Minimization was successful.")
+    print(f"Time spent: {self.minuit.fmin.time:.6f} seconds.")
 
     headers = ["index", "name", "value", "error", "limit-", "limit+", "type", "status"]
     rows = [
@@ -383,10 +400,10 @@ class HybridFit:
         i,
         name,
         f"{self.minuit.values[name]:.4f}",
-        f"{self.minuit.errors[name]:.4f}" if not self.fixed[name] and name not in self.constraints else "N/A",
+        f"{self.minuit.errors[name]:.4f}" if not self.fixed[name] and not self.is_constrained(name) else "N/A",
         f"{self.minuit.limits[name][0]:.4f}" if not np.isinf(self.minuit.limits[name][0]) else "",
         f"{self.minuit.limits[name][1]:.4f}" if not np.isinf(self.minuit.limits[name][1]) else "",
-        "linear" if name in self.terms else ("constr." if name in self.constraints else ""),
+        "constr." if self.is_constrained(name) else ("linear" if name in self.terms else ""),
         "fixed" if self.fixed[name] else ""
       ]
       for i, name in enumerate(self.minuit.parameters)
@@ -409,5 +426,5 @@ class HybridFit:
       "pval": self.pval,
       **self.minuit.values.to_dict(),
       **{f"{name}_err": error for name, error in self.minuit.errors.to_dict().items()},
-      **{f"{name}_err": 0 for name in self.minuit.parameters if self.fixed[name] or (name in self.constraints)}
+      **{f"{name}_err": 0 for name in self.minuit.parameters if self.fixed[name] or self.is_constrained(name)}
     }
