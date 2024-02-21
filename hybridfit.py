@@ -5,11 +5,13 @@ from dataclasses import dataclass
 import iminuit
 from iminuit.cost import LeastSquares
 
-from pytools.expression import Expression, ExpressionLike
 import pytools.util as util
 
 import tabulate as tab
-import json
+
+import inspect
+import numpy as np
+from typing import Callable, Self
 
 # =================================================================================================
 
@@ -21,12 +23,112 @@ class Data:
   y_err: np.ndarray = None
   x_err: np.ndarray = None
 
+# =================================================================================================
+
+# TODO: make 2 options for instantiation?
+#   (a) from function using named parameters, in which case parameters are detected
+#   (b) from function using dictionary, in which case dependent parameter list must be supplied
+#   eval set dynamically based on which version, either unpacking ordered parameters from dictionary
+#     or passing along restricted view of dictionary
+class Expression:
+  
+  # ===============================================================================================
+
+  def __init__(
+    self,
+    function: Callable[..., np.ndarray | np.number] | np.ndarray | np.number,
+    guesses: dict[str, float] = None,
+    bounds: dict[str, float] = None,
+    label: str = None
+  ):
+
+    # store function for internal use
+    if isinstance(function, (np.ndarray, np.number, int, float)):
+      self._function = (lambda t: function * (np.ones(len(t)) if t is not None else 1))
+      signature = {}
+    else:
+      self._function = function
+      # get list of parameter names from function signature
+      signature = inspect.signature(function).parameters if function is not None else {}
+
+    # get parameter names and initial guesses from default values in function signature
+    self.parameters = {
+      name: info.default if info.default != info.empty else None
+      for name, info in list(signature.items())[1:]
+    }
+
+    # if dictionary of guesses passed, override default initial guesses
+    if guesses is not None:
+      for name, guess in guesses.items():
+        if name in self.parameters:
+          self.parameters[name] = guess
+
+    # store parameter bounds if passed
+    self.bounds = bounds
+    if self.bounds is None:
+      self.bounds = {}
+
+    # add label to parameters if passed
+    self.add_label(label)
+
+  # ===============================================================================================
+
+  def add_label(self, label: str) -> None:
+    """Append underscore and label string to each parameter name."""
+    if label is not None:
+      self.parameters = {f"{name}_{label}": value for name, value in self.parameters.items()}
+      self.bounds = {f"{name}_{label}": value for name, value in self.bounds.items()}
+    return self
+
+  # ===============================================================================================
+  
+  def eval(self, p: dict[str, float], t: np.ndarray) -> np.ndarray | float:
+    """Evaluate expression from global parameter dictionary using this expression's known parameter names."""
+    return self._function(t, *(p[name] for name in self.parameters))
+
+  # ===============================================================================================
+
+  # delegate calling to self.eval, which can be changed dynamically (unlike special __call__ method)
+  def __call__(self, p: dict[str, float], t: np.ndarray = None) -> np.ndarray | float:
+    """Evaluate expression from global parameter dictionary using this expression's known parameter names."""
+    return self.eval(p, t)
+
+  # ===============================================================================================
+
+  def _merge_skeleton(self, other: Self) -> Self:
+    """Construct new Expression which merges the parameters of this Expression and another, but leaves evaluation logic undefined."""
+    result = Expression(None)
+    result.parameters = {**self.parameters, **other.parameters}
+    result.bounds = {**self.bounds, **other.bounds}
+    result.eval = None
+    return result
+
+  # ===============================================================================================
+
+  def __add__(self, other: Self) -> Self:
+    """Construct new Expression which returns the sum of this Expression and another."""
+    result = self._merge_skeleton(other)
+    result.eval = lambda p, t: self(p, t) + other(p, t)
+    return result
+
+  # ===============================================================================================
+    
+  def __mul__(self, other: Self) -> Self:
+    """Construct new Expression which returns the product of this Expression and another."""
+    result = self._merge_skeleton(other)
+    result.eval = lambda p, t: self(p, t) * other(p, t)
+    return result
+
+# Type alias for Expressions or arrays/numbers that can be coerced into Expressions.
+ExpressionLike = (Expression | Callable[..., np.ndarray | np.number] | np.ndarray | np.number)
+
 # ==================================================================================================
 
 # Type hint for a function which takes a dictionary of parameter names/values, and returns a value
 # in terms of those parameters. Used to constrain one parameter in terms of others.
 ConstraintFunction = Callable[[Mapping[str, float]], float]
 
+# TODO: Constraint integration with Expression feels hacky. Clean up and unify better somehow
 class Constraint(Expression):
   """Simple container which wraps a constraint function alongside a list declaring the dependent parameters."""
 
@@ -81,13 +183,13 @@ class HybridFit:
     self.data = data
     
     self.scale = scale if scale is not None else 1
-    self.scale = HybridFit._ensure_expression(self.scale)
+    self.scale = util.ensure_type(self.scale, Expression)
 
     self.const = const if const is not None else 0
-    self.const = HybridFit._ensure_expression(self.const)
+    self.const = util.ensure_type(self.const, Expression)
 
     self.terms = terms if terms is not None else {}
-    self.terms = {name: HybridFit._ensure_expression(term) for name, term in self.terms.items()}
+    self.terms = {name: util.ensure_type(term, Expression) for name, term in self.terms.items()}
 
     # internal copies of self.terms and self.const which may be modified to apply parameter constraints
     self._constrained_terms = None
@@ -191,7 +293,7 @@ class HybridFit:
         
         for linear_param in constraint:
 
-          coefficient = HybridFit._ensure_expression(constraint[linear_param])
+          coefficient = util.ensure_type(constraint[linear_param], Expression)
           constraint[linear_param] = coefficient
 
           if (linear_param not in self.terms) or (linear_param in self._linear_constraints):
@@ -226,18 +328,15 @@ class HybridFit:
 
   # ===============================================================================================
 
-  @staticmethod
-  def _ensure_expression(expr):
-    """Wraps the given expression in an Expression object if not already one."""
-    if isinstance(expr, Expression):
-      return expr
-    else:
-      return Expression(expr)
-
-  # ===============================================================================================
-
-  def __call__(self, p: Mapping[str, float], t: np.ndarray) -> np.ndarray:
-    """Evaluate the model using the given independent variable and dictionary of parameter values."""
+  def __call__(self, p: Mapping[str, float] = None, t: np.ndarray = None) -> np.ndarray:
+    """
+    Evaluate the model using the given dictionary of parameter values and independent variable.
+    Defaults to current internal state of parameter system and data points if not supplied.
+    """
+    if p is None:
+      p = self.minuit.values
+    if t is None:
+      t = self.data.x
     return self.scale(p, t) * sum(
       (p[name] * term(p, t) for name, term in self.terms.items()),
       self.const(p, t)
@@ -300,7 +399,7 @@ class HybridFit:
     # absorb fixed terms as part of the constant with no coefficient, and remove from system
     for name in self.terms:
       if self.fixed[name]:
-        self._constrained_const = self._constrained_const + self.minuit.values[name] * self.terms[name]
+        self._constrained_const = self._constrained_const + util.ensure_type(self.minuit.values[name], Expression) * self.terms[name]
         del self._constrained_terms[name]
 
     # after fixed terms removed, modify system of terms according to any linear constraints
@@ -374,27 +473,46 @@ class HybridFit:
 
   # ================================================================================================
     
+  def check_minimum(self, verbose = False):
+    """
+    Checks for valid minimum based on the following criteria:
+    - sufficiently small estimated-distance-to-minimum (EDM),
+    - accurate covariance matrix estimation,
+    - no parameters stuck at limits,
+    - function call limit not exceeded.
+    Returns True if all criteria are satisfied, or else False.
+    Optionally prints warnings for violated criteria if 'verbose' is True.
+    """
+    success = True
+    if not self.minuit.fmin.is_valid:
+      if verbose:
+        print("MINIMIZATION DID NOT CONVERGE!")
+        if self.minuit.fmin.edm > self.minuit.fmin.edm_goal:
+          print(f"EDM (chi2 - chi2_min) ~ {self.minuit.fmin.edm:.4f} exceeds EDM goal of {self.minuit.fmin.edm_goal:.4f}.")
+      success = False
+    if not self.minuit.fmin.has_accurate_covar:
+      if verbose:
+        print("Covariance may not be accurate.")
+      success = False
+    if self.minuit.fmin.has_parameters_at_limit:
+      if verbose:
+        print("Parameter(s) stuck at limits.")
+      success = False
+    if self.minuit.fmin.has_reached_call_limit:
+      if verbose:
+        print("Function call limit exceeded.")
+      success = False
+    if success and verbose:
+      print("Minimization was successful.")
+    return success
+
+  # ================================================================================================
+    
   def print(self):
     """Prints fit convergence status/warnings, table of parameter information, and chi-squared/p-value."""
 
     print()
-    success = True
-    if not self.minuit.fmin.is_valid:
-      print("MINIMIZATION DID NOT CONVERGE!")
-      success = False
-      if self.minuit.fmin.edm > self.minuit.fmin.edm_goal:
-        print(f"EDM (chi2 - chi2_min) ~ {self.minuit.fmin.edm:.4f} exceeds EDM goal of {self.minuit.fmin.edm_goal:.4f}.")
-    if not self.minuit.fmin.has_accurate_covar:
-      print("Covariance may not be accurate.")
-      success = False
-    if self.minuit.fmin.has_parameters_at_limit:
-      print("Parameter(s) stuck at limits.")
-      success = False
-    if self.minuit.fmin.has_reached_call_limit:
-      print("Function call limit exceeded.")
-      success = False
-    if success:
-      print("Minimization was successful.")
+    self.check_minimum(verbose = True)
     print(f"Time spent: {self.minuit.fmin.time:.6f} seconds.")
 
     headers = ["index", "name", "value", "error", "limit-", "limit+", "type", "status"]
@@ -427,6 +545,7 @@ class HybridFit:
       "chi2ndf": self.chi2ndf,
       "chi2ndf_err": self.chi2ndf_err,
       "pval": self.pval,
+      "curve": self(),
       **self.minuit.values.to_dict(),
       **{f"{name}_err": error for name, error in self.minuit.errors.to_dict().items()},
       **{f"{name}_err": 0 for name in self.minuit.parameters if self.fixed[name] or self.is_constrained(name)}

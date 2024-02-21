@@ -4,6 +4,15 @@ import scipy.linalg as lg
 
 # ==================================================================================================
 
+def ensure_type(obj, type):
+  """Wraps the given object as the given type if not already an instance of that type."""
+  if isinstance(obj, type):
+    return obj
+  else:
+    return type(obj)
+
+# ==================================================================================================
+
 def str_to_bool(string):
   """
   Converts the strings 'true' and 'false' (ignoring capitalization) to booleans True and False,
