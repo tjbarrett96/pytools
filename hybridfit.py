@@ -1,6 +1,7 @@
 import numpy as np
 from typing import Mapping, Callable
 from dataclasses import dataclass
+import functools
 
 import iminuit
 from iminuit.cost import LeastSquares
@@ -10,12 +11,15 @@ import pytools.util as util
 import tabulate as tab
 
 import inspect
+import fnmatch
 import numpy as np
 from typing import Callable, Self
 
 # =================================================================================================
 
 @dataclass
+# TODO: consider making NamedTuple instead? then supports both member access and ordered unpacking
+#       e.g. for plotting API that takes plot(x, y, y_err), can do plot(*data)
 class Data:
   """Simple container for x-values, y-values, and optional errorbars."""
   x: np.ndarray
@@ -51,6 +55,11 @@ class Expression:
       # get list of parameter names from function signature
       signature = inspect.signature(function).parameters if function is not None else {}
 
+    # TODO: lru_cache does not work with numpy array argument. is there a workaround?
+    #if self._function is not None:
+    #  cache_wrapper = functools.lru_cache(maxsize = 1)
+    #  self._function = cache_wrapper(self._function)
+
     # get parameter names and initial guesses from default values in function signature
     self.parameters = {
       name: info.default if info.default != info.empty else None
@@ -71,6 +80,10 @@ class Expression:
     # add label to parameters if passed
     self.add_label(label)
 
+    self.t_cache = None
+    self.p_cache = None
+    self.val_cache = None
+
   # ===============================================================================================
 
   def add_label(self, label: str) -> None:
@@ -81,10 +94,23 @@ class Expression:
     return self
 
   # ===============================================================================================
-  
+ 
+  # TODO: add strict_cache = True option to check 't' element-wise, disable for looser size/range checking
+  # TODO: need to keep this eval to use special arg, instead of replacing in __mul__ etc. below
+  # TODO: so modification to __add__ and __mul__ needed
   def eval(self, p: dict[str, float], t: np.ndarray) -> np.ndarray | float:
     """Evaluate expression from global parameter dictionary using this expression's known parameter names."""
-    return self._function(t, *(p[name] for name in self.parameters))
+    args = [p[name] for name in self.parameters]
+    #t_same = (t == self.t_cache).all()
+    t_same = (self.t_cache is not None and len(t) == len(self.t_cache) and t[0] == self.t_cache[0] and t[-1] == self.t_cache[-1])
+    if t_same and (args == self.p_cache):
+      return self.val_cache
+    else:
+      result = self._function(t, *args)
+      self.t_cache = t
+      self.p_cache = args
+      self.val_cache = result
+      return result
 
   # ===============================================================================================
 
@@ -126,7 +152,7 @@ ExpressionLike = (Expression | Callable[..., np.ndarray | np.number] | np.ndarra
 
 # Type hint for a function which takes a dictionary of parameter names/values, and returns a value
 # in terms of those parameters. Used to constrain one parameter in terms of others.
-ConstraintFunction = Callable[[Mapping[str, float]], float]
+ConstraintFunction = Callable[..., float]
 
 # TODO: Constraint integration with Expression feels hacky. Clean up and unify better somehow
 class Constraint(Expression):
@@ -140,7 +166,7 @@ class Constraint(Expression):
   def eval(self, p: Mapping[str, float], t: np.ndarray = None) -> float:
     # restrict parameter dictionary to only the declared dependent parameters
     try:
-      return self.constraint({key: p[key] for key in self.parameters})
+      return self.constraint(*[p[key] for key in self.parameters])
     except KeyError as error:
       error.add_note("Constraint cannot use undeclared parameter.")
       raise
@@ -192,8 +218,8 @@ class HybridFit:
     self.terms = {name: util.ensure_type(term, Expression) for name, term in self.terms.items()}
 
     # internal copies of self.terms and self.const which may be modified to apply parameter constraints
-    self._constrained_terms = None
-    self._constrained_const = None
+    self._opt_terms = None
+    self._opt_const = None
 
     # get a list of all nonlinear parameter names, excluding the linear coefficients
     nonlinear_parameters = [
@@ -211,7 +237,7 @@ class HybridFit:
     self.parameters = {**self.scale.parameters, **self.const.parameters}
     self.bounds = {**self.scale.bounds, **self.const.bounds}
     for name, term in self.terms.items():
-      self.parameters.update({name: 0, **term.parameters})
+      self.parameters.update({**term.parameters, name: 0})
       self.bounds.update(term.bounds)
     
     # mapping of nonlinear parameter(s) to Constraint(s), which only allows other nonlinear parameters
@@ -220,11 +246,24 @@ class HybridFit:
     # mapping of linear parameters to Constraint(s), which only allows linear combinations of unconstrained linear parameters
     self._linear_constraints = {}
 
+    self.cost = LeastSquares(data.x, data.y, data.y_err, self._opt_call)
+
     self.minuit = iminuit.Minuit(
-      LeastSquares(data.x, data.y, data.y_err, self._opt_call),
+      self.cost,
       list(self.parameters.values()),
       name = list(self.parameters.keys())
     )
+
+    self._cached_p = {name: np.nan for name in self.minuit.parameters}
+    self._cached_scale = None
+    self._cached_const = None
+    self._cached_terms = {name: None for name in self.terms}
+
+    # TODO: in the middle of adding these!!!
+    self._cached_opt_p = {name: np.nan for name in self.minuit.parameters}
+    self._cached_opt_scale = None
+    self._cached_opt_const = None
+    self._cached_opt_terms = None
 
     # self.minuit.print_level = 2
 
@@ -245,27 +284,46 @@ class HybridFit:
 
   # ===============================================================================================
   
+  def _fix(self, name: str):
+    self.fixed[name] = True
+    if (name not in self.terms) and (name not in self._nonlinear_constraints):
+      self.minuit.fixed[name] = True
+
   def fix(self, *names: str):
     """
-    Fix given parameter(s) at current value(s). Constrained parameter values will be frozen and constraints
-    no longer applied while fixed.
+    Fix given parameter(s) at current value(s). Supports Unix-style wildcards, e.g. "x_*" will fix
+    "x_1", "x_2", etc. Constrained parameter values will be frozen too.
     """
-    for name in names:
-      self.fixed[name] = True
-      if (name not in self.terms) and (name not in self._nonlinear_constraints):
-        self.minuit.fixed[name] = True
+    if len(names) == 0:
+      for parameter in self.parameters:
+        self._fix(parameter)
+    else:
+      for name in names:
+        for parameter in self.parameters:
+          if fnmatch.fnmatch(parameter, name):
+            self._fix(parameter)
 
   # ===============================================================================================
   
+  def _free(self, name: str):
+    self.fixed[name] = False
+    if (name not in self.terms) and (name not in self._nonlinear_constraints):
+      self.minuit.fixed[name] = False
+
   def free(self, *names: str):
     """
-    Allow given parameter(s) to float, after previously being fixed. Constrained parameters will still
-    have their constraints applied; to remove constraints, use 'HybridFit.remove_constraint'.
+    Allow given parameter(s) to float, after previously being fixed. Supports Unix-style wildcards,
+    e.g. "x_*" will free "x_1", "x_2", etc. For constrained parameters, constraints will resume
+    after freeing. To remove constraints, use 'HybridFit.unconstrain'.
     """
-    for name in names:
-      self.fixed[name] = False
-      if (name not in self.terms) and (name not in self._nonlinear_constraints):
-        self.minuit.fixed[name] = False
+    if len(names) == 0:
+      for parameter in self.parameters:
+        self._free(parameter)
+    else:
+      for name in names:
+        for parameter in self.parameters:
+          if fnmatch.fnmatch(parameter, name):
+            self._free(parameter)
 
   # ===============================================================================================
         
@@ -328,41 +386,103 @@ class HybridFit:
 
   # ===============================================================================================
 
-  def __call__(self, p: Mapping[str, float] = None, t: np.ndarray = None) -> np.ndarray:
+  # TODO: seriously clean this up, hacked together and tested very rapidly
+  def _update_opt_cache(self, p, t):
+
+    update_scale = any(p[key] != self._cached_opt_p[key] for key in self.scale.parameters)
+    # update_scale = False
+    if update_scale or self._cached_opt_scale is None:
+      self._cached_opt_scale = self.scale(p, t)
+    
+    update_const = any(p[key] != self._cached_opt_p[key] for key in self._opt_const.parameters)
+    if update_const or self._cached_opt_const is None:
+      self._cached_opt_const = self._opt_const(p, t)
+
+    for name, term in self._opt_terms.items():
+      update_term = any(self._cached_opt_p[key] != p[key] for key in term.parameters)
+      if update_term or self._cached_opt_terms[name] is None:
+        self._cached_opt_terms[name] = term(p, t)
+
+    self._cached_opt_p = {key: p[key] for key in self.parameters}
+
+  # TODO: need to separate normal cache from constrained_cache, otherwise replace constrained_cache with arrays only as noted below
+  def _update_cache(self, p, t):
+
+    update_scale = any(p[key] != self._cached_p[key] for key in self.scale.parameters)
+    if update_scale or self._cached_scale is None:
+      self._cached_scale = self.scale(p, t)
+
+    update_const = any(p[key] != self._cached_p[key] for key in self.const.parameters)
+    if update_const or self._cached_const is None:
+      self._cached_const = self.const(p, t)
+
+    for name, term in self.terms.items():
+      update_term = any(self._cached_p[key] != p[key] for key in term.parameters)
+      if update_term or self._cached_terms[name] is None:
+        self._cached_terms[name] = term(p, t)
+
+    self._cached_p = {key: p[key] for key in self.parameters}
+
+  # ===============================================================================================
+
+  # TODO: reverse p, t order here
+  def __call__(self, p: Mapping[str, float] = None, t: np.ndarray = None, use_cache: bool = False) -> np.ndarray:
     """
     Evaluate the model using the given dictionary of parameter values and independent variable.
     Defaults to current internal state of parameter system and data points if not supplied.
     """
+
     if p is None:
       p = self.minuit.values
     if t is None:
       t = self.data.x
-    return self.scale(p, t) * sum(
-      (p[name] * term(p, t) for name, term in self.terms.items()),
-      self.const(p, t)
-    )
+
+    if use_cache:
+      self._update_cache(p, t)
+
+    scale = self._cached_scale if use_cache else self.scale(p, t)
+    const = self._cached_const if use_cache else self.const(p, t)
+
+    term_total = 0
+    # TODO: could be subtle bugs if not also checking that t is the same as cached!!!!
+    for name, term in self.terms.items():
+      term_total += p[name] * (self._cached_terms[name] if use_cache else term(p, t))
+
+    return scale * (const + term_total)
   
   # ===============================================================================================
 
-  def fit_linear_combination(self, p: Mapping[str, float], t: np.ndarray) -> dict[str, float]:
+  def _fit_linear_combination(self, p: Mapping[str, float], t: np.ndarray) -> dict[str, float]:
     """
     Returns a dictionary of best-fit coefficients for the terms in the linear combination
     which are currently floating.
     """
 
-    scale, const = self.scale(p, t), self._constrained_const(p, t)
+    #self._update_opt_cache(p, t)
+
+    y = self.data.y if self.cost.mask is None else self.data.y[self.cost.mask]
+    err = self.data.y_err if self.cost.mask is None else self.data.y_err[self.cost.mask]
+
+    # TODO: use **CACHING** here too!!!!
+    #scale, const = self._cached_opt_scale, self._cached_opt_const
+    scale, const = self.scale(p, t), self._opt_const(p, t)
     coeffs = util.fit_linear_combination(
-      [term(p, t) for term in self._constrained_terms.values()],
-      self.data.y / scale - const, # must remove scale and const models from data to isolate linear combination
-      self.data.y_err / scale # dividing by scale model also scales data errorbars, but not subtracting const
+      #list(self._cached_opt_terms.values()),
+      [term(p, t) for term in self._opt_terms.values()],
+      # TODO: can cache these too!!!!!!
+      y / scale - const, # must remove scale and const models from data to isolate linear combination
+      err / scale # dividing by scale model also scales data errorbars, but not subtracting const
     )
 
-    return dict(zip(self._constrained_terms.keys(), coeffs))
+    return dict(zip(self._opt_terms.keys(), coeffs))
   
   # ===============================================================================================
 
   def _opt_call(self, t: np.ndarray, p: np.ndarray) -> np.ndarray:
-    """Internal wrapping of model evaluation which optimizes linear parameters and applies constraints."""
+    """
+    Internal wrapping of model evaluation which optimizes linear parameters, applies constraints, and
+    uses caching to speed up model evaluation when some parameters are unchanged.
+    """
     
     # wrap parameter array into dictionary with parameter names
     p = dict(zip(self.parameters, p))
@@ -374,7 +494,7 @@ class HybridFit:
 
     # optimize linear coefficient parameters
     if self._fit_linear:
-      coeffs = self.fit_linear_combination(p, t)
+      coeffs = self._fit_linear_combination(p, t)
       p.update(coeffs)
 
     # update linear constrained parameters
@@ -386,21 +506,37 @@ class HybridFit:
         )
     
     # evaluate model with updated parameter dictionary
-    return self(p, t)
+    # TODO: maybe don't use __call__ for this, but custom code here that uses the cached arrays. then __call__ doesn't know about internal cache.
+    return self(p, t, use_cache = False)
   
   # ===============================================================================================
 
-  def fit(self):
+  def hesse(self):
+    # release floating linear parameters in minuit system, call HESSE, then re-fix them
+    floating_coeffs = [name for name in self._opt_terms]
+    if len(floating_coeffs) > 0:
+      self.minuit.fixed[*floating_coeffs] = False
+    self._fit_linear = False
+    self.minuit.hesse()
+    if len(floating_coeffs) > 0:
+      self.minuit.fixed[*floating_coeffs] = True
+    self._fit_linear = True
+
+  # ===============================================================================================
+
+  # TODO: something about caching is sub-optimal, saw runtime low as 6-ish seconds but now 8-ish
+  # probably to do with the _cached_constr_* versions
+  def fit(self, verbose = True, max_iterations = 4, hesse = True):
     """Runs chi-squared minimization and covariance estimation for floating parameters."""
 
-    self._constrained_terms = {name: value for name, value in self.terms.items()}
-    self._constrained_const = self.const
+    self._opt_terms = {name: value for name, value in self.terms.items()}
+    self._opt_const = self.const
 
     # absorb fixed terms as part of the constant with no coefficient, and remove from system
     for name in self.terms:
       if self.fixed[name]:
-        self._constrained_const = self._constrained_const + util.ensure_type(self.minuit.values[name], Expression) * self.terms[name]
-        del self._constrained_terms[name]
+        self._opt_const = self._opt_const + util.ensure_type(self.minuit.values[name], Expression) * self.terms[name]
+        del self._opt_terms[name]
 
     # after fixed terms removed, modify system of terms according to any linear constraints
     # linear combination in fit model has the form:
@@ -410,24 +546,27 @@ class HybridFit:
     # so each remaining term picks up scaled f_k term from linearly-constrained a_k
     for name in self.terms:
       # if constrained parameter is still in the system (i.e. wasn't fixed)...
-      if (name in self._linear_constraints) and (name in self._constrained_terms):
+      if (name in self._linear_constraints) and (name in self._opt_terms):
         for linear_param, coeff_constraint in self._linear_constraints[name].items():
           # ensure each dependent parameter is still in the constrained system
-          if linear_param not in self._constrained_terms:
+          if linear_param not in self._opt_terms:
             raise ValueError(f"Linear parameter '{linear_param}' must be floating unconstrained in order to constrain '{name}'.")
           # update term associated with each dependent parameter
-          self._constrained_terms[linear_param] = self._constrained_terms[linear_param] + coeff_constraint * self.terms[name]
+          self._opt_terms[linear_param] = self._opt_terms[linear_param] + coeff_constraint * self.terms[name]
         # remove constrained parameter from the constrained linear system
-        del self._constrained_terms[name]
+        del self._opt_terms[name]
+
+    self._cached_opt_const = None
+    self._cached_opt_terms = {name: None for name in self._opt_terms}
 
     iterations = 0
     success = False
-    while not success and iterations < 2:
+    while not success and iterations < max_iterations:
 
       self.minuit.migrad()
 
       # update linear parameters in minuit results
-      coeffs = self.fit_linear_combination(self.minuit.values, self.data.x)
+      coeffs = self._fit_linear_combination(self.minuit.values, self.data.x if self.cost.mask is None else self.data.x[self.cost.mask])
       if len(coeffs) > 0:
         self.minuit.values[*coeffs.keys()] = coeffs.values()
 
@@ -444,17 +583,14 @@ class HybridFit:
             for a, coeff in constraint.items()
           )
 
-      # release floating linear parameters in minuit system, call HESSE, then re-fix them
-      floating_coeffs = [name for name in self._constrained_terms]
-      self.minuit.fixed[*floating_coeffs] = False
-      self._fit_linear = False
-      self.minuit.hesse()
-      self.minuit.fixed[*floating_coeffs] = True
-      self._fit_linear = True
+      if hesse:
+        print("Running HESSE.")
+        self.hesse()
 
       # re-evaluate EDM after calling HESSE
       if self.minuit.fmin.edm > self.minuit.fmin.edm_goal:
-        print(f"After HESSE, updated EDM exceeds target for convergence. Repeating minimization.")
+        if verbose:
+          print(f"EDM exceeds target for convergence. Repeating minimization.")
         iterations += 1
       else:
         success = True
@@ -462,14 +598,18 @@ class HybridFit:
     self.cov = np.array(self.minuit.covariance)
     self.errors = self.minuit.errors.to_dict()
 
-    self.ndf = len(self.data.y) - self.minuit.nfit - len(floating_coeffs)
+    # TODO: is it right to not count fixed parameters in NDF after some rounds of optimizing them?
+    # TODO: sometimes chi2 goes down a little, but chi2/ndf goes up a little after freeing lots of parameters in last step
+    self.ndf = self.cost.ndata - (self.minuit.nfit + len(self._opt_terms))
     self.chi2 = self.minuit.fval
     self.chi2_err = np.sqrt(2 * self.ndf)
     self.chi2ndf = self.chi2 / self.ndf
     self.chi2ndf_err = self.chi2_err / self.ndf
     self.pval = util.p_value(self.chi2, self.ndf)
+    self.curve = self()
 
-    self.print()
+    if verbose:
+      self.print()
 
   # ================================================================================================
     
@@ -516,37 +656,88 @@ class HybridFit:
     print(f"Time spent: {self.minuit.fmin.time:.6f} seconds.")
 
     headers = ["index", "name", "value", "error", "limit-", "limit+", "type", "status"]
-    rows = [
-      [
+    rows = []
+
+    for i, name in enumerate(self.minuit.parameters):
+      value = self.minuit.values[name]
+      error = self.minuit.errors[name]
+      error_order = util.order_of_magnitude(error)
+      # TODO: sort out decimal/scientific notation appearance based on sig figs / desired order limits
+      decimals = 4
+      # if error_order < 0:
+      #   decimals = abs(error_order) + 1
+      rows.append([
         i,
         name,
-        f"{self.minuit.values[name]:.4f}",
-        f"{self.minuit.errors[name]:.4f}" if not self.fixed[name] and not self.is_constrained(name) else "N/A",
+        f"{value:.{decimals}f}",
+        # value,
+        f"{error:.{decimals}f}" if not self.fixed[name] and not self.is_constrained(name) else "",
+        # error if not self.fixed[name] and not self.is_constrained(name) else np.nan,
         f"{self.minuit.limits[name][0]:.4f}" if not np.isinf(self.minuit.limits[name][0]) else "",
         f"{self.minuit.limits[name][1]:.4f}" if not np.isinf(self.minuit.limits[name][1]) else "",
-        "constr." if self.is_constrained(name) else ("linear" if name in self.terms else ""),
-        "fixed" if self.fixed[name] else ""
-      ]
-      for i, name in enumerate(self.minuit.parameters)
-    ]
+        "linear" if name in self.terms else "",
+        "fixed" if self.fixed[name] else ("constr." if self.is_constrained(name) else "")
+      ])
 
     print(tab.tabulate(rows, headers, tablefmt = "grid", numalign = "left"))
     print(f"chi2 = {self.chi2:.4f} +/- {self.chi2_err:.4f}")
     print(f"chi2/ndf = {self.chi2ndf:.4f} +/- {self.chi2ndf_err:.4f}")
-    print(f"p-value = {self.pval:.4f}")
+    pval_format = ".4f" if util.order_of_magnitude(self.pval) > -4 else ".1e"
+    print(f"p-value = {self.pval:{pval_format}}")
     print()
 
   # ===============================================================================================
     
+  def statbox(self):
+    """Returns list of math-formatted strings to display chi2/ndf and p-value on a plot."""
+    return [
+      rf"$\chi^2$/ndf = {self.chi2ndf:.4f} $\pm$ {self.chi2ndf_err:.4f}",
+      rf"$p$ = {self.pval:.4f}"
+    ]
+
+  # ===============================================================================================
+
+  def pulls(self):
+    """Calculate and return the array of fit pulls [(y - f(x)) / y_err]."""
+    return (self.data.y - self.curve) / self.data.y_err
+
+  # ===============================================================================================
+
+  def fft(self):
+    """
+    Calculate and return the FFT of the fit pulls, scaled as units of the fit's chi2/ndf.
+    Based on Parseval's theorem: chi^2 = sum(pulls^2) = sum(|FFT|^2) / len(FFT), so the entries of
+    |FFT|^2 / [len(FFT) * NDF] yield each FFT frequency bin's contribution to the chi^2/ndf.
+    """
+    pulls = self.pulls()
+    # Only want frequencies up to the Nyquist frequency, so use np.fft.rfft.
+    fft = np.abs(np.fft.rfft(pulls))**2 / (len(pulls) * self.ndf)
+    # But Parseval's theorem includes all FFT bins, including those in the 2nd mirrored half.
+    # So double the FFT power in the non-zero bins that would have been counted twice in the chi^2.
+    fft[1:] *= 2
+    frequencies = np.fft.rfftfreq(len(pulls), self.data.x[1] - self.data.x[0])
+    return frequencies, fft
+
+  # ===============================================================================================
+
   def results(self):
+    fft_x, fft_y = self.fft()
     return {
-      "chi2": self.chi2,
-      "chi2_err": self.chi2_err,
-      "chi2ndf": self.chi2ndf,
-      "chi2ndf_err": self.chi2ndf_err,
-      "pval": self.pval,
-      "curve": self(),
+      "fit_chi2": self.chi2,
+      "fit_chi2_err": self.chi2_err,
+      "fit_chi2ndf": self.chi2ndf,
+      "fit_chi2ndf_err": self.chi2ndf_err,
+      "fit_pvalue": self.pval,
       **self.minuit.values.to_dict(),
       **{f"{name}_err": error for name, error in self.minuit.errors.to_dict().items()},
-      **{f"{name}_err": 0 for name in self.minuit.parameters if self.fixed[name] or self.is_constrained(name)}
+      **{f"{name}_err": -1 for name in self.minuit.parameters if self.is_constrained(name)},
+      **{f"{name}_err": -2 for name in self.minuit.parameters if self.fixed[name]},
+      "fit_x": self.data.x,
+      "fit_y": self.data.y,
+      "fit_y_err": self.data.y_err,
+      "fit_curve": self.curve,
+      "fit_residuals": self.data.y - self.curve,
+      "fit_pulls": self.pulls(),
+      "fit_fft_x": fft_x,
+      "fit_fft_y": fft_y
     }

@@ -12,6 +12,35 @@ def ensure_type(obj, type):
     return type(obj)
 
 # ==================================================================================================
+  
+def collect_dict_values_as_lists(*dicts):
+  """
+  Merges a list of dictionaries with the same key-value structure into one dictionary
+  with a list of values for each key.
+  """
+  return {
+    key: [dictionary[key] for dictionary in dicts]
+    for key in dicts[0]
+  }
+
+# ==================================================================================================
+  
+def merge_dicts(*dicts):
+  """
+  Merges a list of dictionaries into one dictionary with all of the unique keys and values together.
+  """
+  return {
+    key: value
+    for dictionary in dicts
+    for key, value in dictionary.items()
+  }
+
+# ==================================================================================================
+
+def order_of_magnitude(number):
+  return int(np.floor(np.log10(abs(number)))) if number != 0 else 0
+
+# ==================================================================================================
 
 def str_to_bool(string):
   """
@@ -24,6 +53,16 @@ def str_to_bool(string):
     return False
   else:
     raise ValueError("Boolean string must be either 'true' or 'false'.")
+
+# ==================================================================================================
+  
+def is_iterable(obj):
+  """Checks whether or not the given object is an iterable container, excluding strings."""
+  try:
+    iter(obj)
+    return (not isinstance(obj, str))
+  except TypeError:
+    return False
 
 # ==================================================================================================
 
