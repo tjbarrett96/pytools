@@ -254,17 +254,6 @@ class HybridFit:
       name = list(self.parameters.keys())
     )
 
-    self._cached_p = {name: np.nan for name in self.minuit.parameters}
-    self._cached_scale = None
-    self._cached_const = None
-    self._cached_terms = {name: None for name in self.terms}
-
-    # TODO: in the middle of adding these!!!
-    self._cached_opt_p = {name: np.nan for name in self.minuit.parameters}
-    self._cached_opt_scale = None
-    self._cached_opt_const = None
-    self._cached_opt_terms = None
-
     # self.minuit.print_level = 2
 
     # apply parameter bounds to minuit
@@ -386,47 +375,8 @@ class HybridFit:
 
   # ===============================================================================================
 
-  # TODO: seriously clean this up, hacked together and tested very rapidly
-  def _update_opt_cache(self, p, t):
-
-    update_scale = any(p[key] != self._cached_opt_p[key] for key in self.scale.parameters)
-    # update_scale = False
-    if update_scale or self._cached_opt_scale is None:
-      self._cached_opt_scale = self.scale(p, t)
-    
-    update_const = any(p[key] != self._cached_opt_p[key] for key in self._opt_const.parameters)
-    if update_const or self._cached_opt_const is None:
-      self._cached_opt_const = self._opt_const(p, t)
-
-    for name, term in self._opt_terms.items():
-      update_term = any(self._cached_opt_p[key] != p[key] for key in term.parameters)
-      if update_term or self._cached_opt_terms[name] is None:
-        self._cached_opt_terms[name] = term(p, t)
-
-    self._cached_opt_p = {key: p[key] for key in self.parameters}
-
-  # TODO: need to separate normal cache from constrained_cache, otherwise replace constrained_cache with arrays only as noted below
-  def _update_cache(self, p, t):
-
-    update_scale = any(p[key] != self._cached_p[key] for key in self.scale.parameters)
-    if update_scale or self._cached_scale is None:
-      self._cached_scale = self.scale(p, t)
-
-    update_const = any(p[key] != self._cached_p[key] for key in self.const.parameters)
-    if update_const or self._cached_const is None:
-      self._cached_const = self.const(p, t)
-
-    for name, term in self.terms.items():
-      update_term = any(self._cached_p[key] != p[key] for key in term.parameters)
-      if update_term or self._cached_terms[name] is None:
-        self._cached_terms[name] = term(p, t)
-
-    self._cached_p = {key: p[key] for key in self.parameters}
-
-  # ===============================================================================================
-
   # TODO: reverse p, t order here
-  def __call__(self, p: Mapping[str, float] = None, t: np.ndarray = None, use_cache: bool = False) -> np.ndarray:
+  def __call__(self, p: Mapping[str, float] = None, t: np.ndarray = None) -> np.ndarray:
     """
     Evaluate the model using the given dictionary of parameter values and independent variable.
     Defaults to current internal state of parameter system and data points if not supplied.
@@ -437,16 +387,10 @@ class HybridFit:
     if t is None:
       t = self.data.x
 
-    if use_cache:
-      self._update_cache(p, t)
-
-    scale = self._cached_scale if use_cache else self.scale(p, t)
-    const = self._cached_const if use_cache else self.const(p, t)
-
+    scale, const = self.scale(p, t), self.const(p, t)
     term_total = 0
-    # TODO: could be subtle bugs if not also checking that t is the same as cached!!!!
     for name, term in self.terms.items():
-      term_total += p[name] * (self._cached_terms[name] if use_cache else term(p, t))
+      term_total += p[name] * term(p, t)
 
     return scale * (const + term_total)
   
@@ -458,18 +402,13 @@ class HybridFit:
     which are currently floating.
     """
 
-    #self._update_opt_cache(p, t)
-
     y = self.data.y if self.cost.mask is None else self.data.y[self.cost.mask]
     err = self.data.y_err if self.cost.mask is None else self.data.y_err[self.cost.mask]
 
     # TODO: use **CACHING** here too!!!!
-    #scale, const = self._cached_opt_scale, self._cached_opt_const
     scale, const = self.scale(p, t), self._opt_const(p, t)
     coeffs = util.fit_linear_combination(
-      #list(self._cached_opt_terms.values()),
       [term(p, t) for term in self._opt_terms.values()],
-      # TODO: can cache these too!!!!!!
       y / scale - const, # must remove scale and const models from data to isolate linear combination
       err / scale # dividing by scale model also scales data errorbars, but not subtracting const
     )
@@ -506,8 +445,7 @@ class HybridFit:
         )
     
     # evaluate model with updated parameter dictionary
-    # TODO: maybe don't use __call__ for this, but custom code here that uses the cached arrays. then __call__ doesn't know about internal cache.
-    return self(p, t, use_cache = False)
+    return self(p, t)
   
   # ===============================================================================================
 
