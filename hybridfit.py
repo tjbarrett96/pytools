@@ -257,7 +257,7 @@ class HybridFit:
       name = list(self.parameters.keys())
     )
 
-    # self.minuit.print_level = 2
+    self.minuit.print_level = 1
 
     # apply parameter bounds to minuit
     for name, value in self.bounds.items():
@@ -418,7 +418,6 @@ class HybridFit:
     y = self.data.y if self.cost.mask is None else self.data.y[self.cost.mask]
     err = self.data.y_err if self.cost.mask is None else self.data.y_err[self.cost.mask]
 
-    # TODO: use **CACHING** here too!!!!
     scale, const = self.scale(p, t), self._opt_const(p, t)
     coeffs = util.fit_linear_combination(
       [term(p, t) for term in self._opt_terms.values()],
@@ -475,8 +474,6 @@ class HybridFit:
 
   # ===============================================================================================
 
-  # TODO: something about caching is sub-optimal, saw runtime low as 6-ish seconds but now 8-ish
-  # probably to do with the _cached_constr_* versions
   def fit(self, verbose = True, max_iterations = 5, hesse = True):
     """Runs chi-squared minimization and covariance estimation for floating parameters."""
 
@@ -507,28 +504,27 @@ class HybridFit:
         # remove constrained parameter from the constrained linear system
         del self._opt_terms[name]
 
-    self._cached_opt_const = None
-    self._cached_opt_terms = {name: None for name in self._opt_terms}
-
     iterations = 0
     success = False
     while not success and iterations < max_iterations:
 
       self.minuit.migrad()
 
+      # update nonlinear constrained parameters in minuit results
+      for name, constraint in self._nonlinear_constraints.items():
+        if not self.fixed[name]:
+          # print(f"Updating constrained parameter {name}")
+          self.minuit.values[name] = constraint(self.minuit.values)
+
       # update linear parameters in minuit results
       coeffs = self._fit_linear_combination(self.minuit.values, self.data.x if self.cost.mask is None else self.data.x[self.cost.mask])
       if len(coeffs) > 0:
         self.minuit.values[*coeffs.keys()] = coeffs.values()
 
-      # update nonlinear constrained parameters in minuit results
-      for name, constraint in self._nonlinear_constraints.items():
-        if not self.fixed[name]:
-          self.minuit.values[name] = constraint(self.minuit.values)
-
       # update linear constrained parameters in minuit results
       for name, constraint in self._linear_constraints.items():
         if not self.fixed[name]:
+          # print(f"Updating linearly constrained parameter '{name}' which depends on '{list(constraint.keys())}'")
           self.minuit.values[name] = sum(
             self.minuit.values[a] * coeff(self.minuit.values)
             for a, coeff in constraint.items()
@@ -538,6 +534,22 @@ class HybridFit:
         if verbose:
           print("Running HESSE.")
         self.hesse()
+      
+      self.cov = np.array(self.minuit.covariance)
+      self.errors = self.minuit.errors.to_dict()
+
+      # TODO: is it right to not count fixed parameters in NDF after some rounds of optimizing them?
+      # TODO: sometimes chi2 goes down a little, but chi2/ndf goes up a little after freeing lots of parameters in last step
+      self.ndf = self.cost.ndata - (self.minuit.nfit + len(self._opt_terms))
+      self.chi2 = self.minuit.fval
+      self.chi2_err = np.sqrt(2 * self.ndf)
+      self.chi2ndf = self.chi2 / self.ndf
+      self.chi2ndf_err = self.chi2_err / self.ndf
+      self.pval = util.p_value(self.chi2, self.ndf)
+      self.curve = self()
+
+      if verbose:
+        self.print()
 
       # re-evaluate fit quality after running HESSE
       if not (self.minuit.fmin.is_valid and self.minuit.fmin.has_accurate_covar):
@@ -546,22 +558,6 @@ class HybridFit:
         iterations += 1
       else:
         success = True
-
-    self.cov = np.array(self.minuit.covariance)
-    self.errors = self.minuit.errors.to_dict()
-
-    # TODO: is it right to not count fixed parameters in NDF after some rounds of optimizing them?
-    # TODO: sometimes chi2 goes down a little, but chi2/ndf goes up a little after freeing lots of parameters in last step
-    self.ndf = self.cost.ndata - (self.minuit.nfit + len(self._opt_terms))
-    self.chi2 = self.minuit.fval
-    self.chi2_err = np.sqrt(2 * self.ndf)
-    self.chi2ndf = self.chi2 / self.ndf
-    self.chi2ndf_err = self.chi2_err / self.ndf
-    self.pval = util.p_value(self.chi2, self.ndf)
-    self.curve = self()
-
-    if verbose:
-      self.print()
 
   # ================================================================================================
     
