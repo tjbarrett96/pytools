@@ -1,6 +1,7 @@
 import scipy.stats
 import numpy as np
 import scipy.linalg as lg
+import dill
 
 # ==================================================================================================
 
@@ -63,6 +64,19 @@ def is_iterable(obj):
     return (not isinstance(obj, str))
   except TypeError:
     return False
+
+# ==================================================================================================
+  
+def save(obj: object, filename: str) -> None:
+  """Saves given object to given filename using dill (pickle) module."""
+  with open(filename, "wb") as output_file:
+    dill.dump(obj, output_file)
+
+# ==================================================================================================
+def load(filename: str) -> object:
+  """Loads object from given filename using dill (pickle) module."""
+  with open(filename, "rb") as input_file:
+    return dill.load(input_file)
 
 # ==================================================================================================
 
