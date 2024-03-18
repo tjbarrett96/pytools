@@ -173,6 +173,9 @@ class Constraint(Expression):
 
 # =================================================================================================
 
+# TODO: add functionality to mask data, and keep track of which points were masked.
+#         that way can provide easy access for plotting data with xs for masked points without duplicating manual checks
+
 class HybridFit:
   """
   Fit a model of the form 'scale * (const + a_0 * term_0 + a_1 * term_1 + ...)' to data,
@@ -375,6 +378,16 @@ class HybridFit:
 
   # ===============================================================================================
 
+  def at_limit(self, name):
+    """Checks if the given parameter is stuck at either its lower or upper limit."""
+    value, error = self.minuit.values[name], self.minuit.errors[name]
+    if self.minuit.limits[name] is not None:
+      for limit in self.minuit.limits[name]:
+        if abs(value - limit) <= 0.5 * error:
+          return True
+
+  # ===============================================================================================
+
   # TODO: reverse p, t order here
   def __call__(self, p: Mapping[str, float] = None, t: np.ndarray = None) -> np.ndarray:
     """
@@ -464,7 +477,7 @@ class HybridFit:
 
   # TODO: something about caching is sub-optimal, saw runtime low as 6-ish seconds but now 8-ish
   # probably to do with the _cached_constr_* versions
-  def fit(self, verbose = True, max_iterations = 4, hesse = True):
+  def fit(self, verbose = True, max_iterations = 5, hesse = True):
     """Runs chi-squared minimization and covariance estimation for floating parameters."""
 
     self._opt_terms = {name: value for name, value in self.terms.items()}
@@ -522,13 +535,14 @@ class HybridFit:
           )
 
       if hesse:
-        print("Running HESSE.")
+        if verbose:
+          print("Running HESSE.")
         self.hesse()
 
-      # re-evaluate EDM after calling HESSE
-      if self.minuit.fmin.edm > self.minuit.fmin.edm_goal:
+      # re-evaluate fit quality after running HESSE
+      if not (self.minuit.fmin.is_valid and self.minuit.fmin.has_accurate_covar):
         if verbose:
-          print(f"EDM exceeds target for convergence. Repeating minimization.")
+          print(f"Minuit is unhappy with fit validity after HESSE. Repeating minimization.")
         iterations += 1
       else:
         success = True
@@ -643,13 +657,13 @@ class HybridFit:
 
   def fft(self):
     """
-    Calculate and return the FFT of the fit pulls, scaled as units of the fit's chi2/ndf.
+    Calculate and return the FFT of the fit pulls, scaled as units of the fit's chi2.
     Based on Parseval's theorem: chi^2 = sum(pulls^2) = sum(|FFT|^2) / len(FFT), so the entries of
-    |FFT|^2 / [len(FFT) * NDF] yield each FFT frequency bin's contribution to the chi^2/ndf.
+    |FFT|^2 / len(FFT) yield each FFT frequency bin's contribution to the chi^2.
     """
     pulls = self.pulls()
     # Only want frequencies up to the Nyquist frequency, so use np.fft.rfft.
-    fft = np.abs(np.fft.rfft(pulls))**2 / (len(pulls) * self.ndf)
+    fft = np.abs(np.fft.rfft(pulls))**2 / len(pulls)
     # But Parseval's theorem includes all FFT bins, including those in the 2nd mirrored half.
     # So double the FFT power in the non-zero bins that would have been counted twice in the chi^2.
     fft[1:] *= 2
@@ -658,24 +672,30 @@ class HybridFit:
 
   # ===============================================================================================
 
-  def results(self):
+  def results(self, prefix = ""):
+    if prefix != "":
+      prefix = f"{prefix}_"
     fft_x, fft_y = self.fft()
     return {
-      "fit_chi2": self.chi2,
-      "fit_chi2_err": self.chi2_err,
-      "fit_chi2ndf": self.chi2ndf,
-      "fit_chi2ndf_err": self.chi2ndf_err,
-      "fit_pvalue": self.pval,
-      **self.minuit.values.to_dict(),
-      **{f"{name}_err": error for name, error in self.minuit.errors.to_dict().items()},
-      **{f"{name}_err": -1 for name in self.minuit.parameters if self.is_constrained(name)},
-      **{f"{name}_err": -2 for name in self.minuit.parameters if self.fixed[name]},
-      "fit_x": self.data.x,
-      "fit_y": self.data.y,
-      "fit_y_err": self.data.y_err,
-      "fit_curve": self.curve,
-      "fit_residuals": self.data.y - self.curve,
-      "fit_pulls": self.pulls(),
-      "fit_fft_x": fft_x,
-      "fit_fft_y": fft_y
+      f"{prefix}fit_chi2": self.chi2,
+      f"{prefix}fit_chi2_err": self.chi2_err,
+      f"{prefix}fit_ndf": self.ndf,
+      f"{prefix}fit_chi2ndf": self.chi2ndf,
+      f"{prefix}fit_chi2ndf_err": self.chi2ndf_err,
+      f"{prefix}fit_pvalue": self.pval,
+      **{f"{prefix}{name}": value for name, value in self.minuit.values.to_dict().items()},
+      **{f"{prefix}{name}_err": error for name, error in self.minuit.errors.to_dict().items()},
+      **{f"{prefix}{name}_err": -1.0 for name in self.minuit.parameters if self.is_constrained(name)},
+      **{f"{prefix}{name}_err": -2.0 for name in self.minuit.parameters if self.fixed[name]},
+      **{f"{prefix}{name}_valid": (not self.at_limit(name) and self.minuit.fmin.has_accurate_covar) for name in self.minuit.parameters},
+      f"{prefix}fit_x": self.data.x,
+      f"{prefix}fit_y": self.data.y,
+      f"{prefix}fit_y_err": self.data.y_err,
+      f"{prefix}fit_curve": self.curve,
+      f"{prefix}fit_residuals": self.data.y - self.curve,
+      f"{prefix}fit_pulls": self.pulls(),
+      f"{prefix}fit_fft_x": fft_x,
+      f"{prefix}fit_fft_y": fft_y,
+      f"{prefix}fit_converged": self.minuit.fmin.is_valid,
+      f"{prefix}err_accurate": self.minuit.fmin.has_accurate_covar
     }
