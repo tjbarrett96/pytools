@@ -73,10 +73,21 @@ def save(obj: object, filename: str) -> None:
     dill.dump(obj, output_file)
 
 # ==================================================================================================
+    
 def load(filename: str) -> object:
   """Loads object from given filename using dill (pickle) module."""
   with open(filename, "rb") as input_file:
     return dill.load(input_file)
+
+# ==================================================================================================
+  
+def matrix_to_dict(matrix: np.ndarray, labels: list[str]) -> dict[str, dict[str, float]]:
+  """
+  For a square matrix whose dimensions can both be labeled by the same sequence of strings (e.g.
+  a covariance matrix), returns a nested dictionary allowing element access by string labels.
+  For example: cov_matrix[0][1] ==> cov_dict["a"]["b"].
+  """
+  return {a: {b: matrix[i, j] for j, b in enumerate(labels)} for i, a in enumerate(labels)}
 
 # ==================================================================================================
 
