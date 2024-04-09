@@ -434,7 +434,7 @@ class HybridFit:
     Internal wrapping of model evaluation which optimizes linear parameters, applies constraints, and
     uses caching to speed up model evaluation when some parameters are unchanged.
     """
-    
+
     # wrap parameter array into dictionary with parameter names
     p = dict(zip(self.parameters, p))
     
@@ -513,7 +513,6 @@ class HybridFit:
       # update nonlinear constrained parameters in minuit results
       for name, constraint in self._nonlinear_constraints.items():
         if not self.fixed[name]:
-          # print(f"Updating constrained parameter {name}")
           self.minuit.values[name] = constraint(self.minuit.values)
 
       # update linear parameters in minuit results
@@ -524,7 +523,6 @@ class HybridFit:
       # update linear constrained parameters in minuit results
       for name, constraint in self._linear_constraints.items():
         if not self.fixed[name]:
-          # print(f"Updating linearly constrained parameter '{name}' which depends on '{list(constraint.keys())}'")
           self.minuit.values[name] = sum(
             self.minuit.values[a] * coeff(self.minuit.values)
             for a, coeff in constraint.items()
@@ -534,8 +532,8 @@ class HybridFit:
         if verbose:
           print("Running HESSE.")
         self.hesse()
-      
-      self.cov = np.array(self.minuit.covariance)
+
+      self.cov = self.minuit.covariance
       self.errors = self.minuit.errors.to_dict()
 
       # TODO: is it right to not count fixed parameters in NDF after some rounds of optimizing them?
@@ -693,5 +691,7 @@ class HybridFit:
       f"{prefix}fit_fft_x": fft_x,
       f"{prefix}fit_fft_y": fft_y,
       f"{prefix}fit_converged": self.minuit.fmin.is_valid,
-      f"{prefix}err_accurate": self.minuit.fmin.has_accurate_covar
+      f"{prefix}err_accurate": self.minuit.fmin.has_accurate_covar,
+      f"{prefix}cov_labels": ",".join(self.cov._var2pos),
+      f"{prefix}cov": np.array(self.cov).flatten()
     }
