@@ -2,6 +2,7 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 from matplotlib.backends.backend_pdf import PdfPages
 import numpy as np
+import os
 
 import pytools.util as util
 
@@ -213,6 +214,7 @@ def vertical_spread(width, x = 0, color = "k", **kwargs):
 
 def make_pdf(path):
   """Create and return PDF at given path."""
+  os.makedirs(os.path.dirname(path), exist_ok = True)
   return PdfPages(path)
 
 # ==================================================================================================
