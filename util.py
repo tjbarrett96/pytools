@@ -2,6 +2,7 @@ import scipy.stats
 import numpy as np
 import scipy.linalg as lg
 import dill
+import os
 
 # ==================================================================================================
 
@@ -69,6 +70,7 @@ def is_iterable(obj):
   
 def save(obj: object, filename: str) -> None:
   """Saves given object to given filename using dill (pickle) module."""
+  os.makedirs(os.path.dirname(filename), exist_ok = True)
   with open(filename, "wb") as output_file:
     dill.dump(obj, output_file)
 
