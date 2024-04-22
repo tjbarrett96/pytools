@@ -118,8 +118,53 @@ def errorbar(x, y, y_err, x_err = None, ls = "-", marker = "o", ms = 4, capsize 
 # ==================================================================================================
 
 def errorband(x, y, y_err, **kwargs):
-  plot_args = {"alpha": 0.3, "color": "k", "ec": None, **kwargs}
-  return plt.fill_between(x, y - y_err, y + y_err, **plot_args)
+  return plt.fill_between(
+    x,
+    y - y_err,
+    y + y_err,
+    **{
+      "alpha": 0.3,
+      "color": "k",
+      "ec": None,
+      **kwargs
+    }
+  )
+
+# ==================================================================================================
+
+def plot(
+  x,
+  y,
+  y_err = None,
+  x_err = None,
+  line = True,
+  markers = True,
+  errorbars = True,
+  errorbands = False,
+  errorband_alpha = 0.3,
+  **kwargs
+):
+  """
+  Simple plot interface combining any optional combination of lines, markers, errorbars, and errorbands.
+  Extra keyword arguments are forwarded to plt.errorbar(...).
+  """
+  
+  if line or markers or errorbars:
+    ls = kwargs.get('ls', '-') if line else ''
+    marker = kwargs.get('marker', 'o') if markers else ''
+    plt.errorbar(
+      x,
+      y,
+      y_err,
+      x_err,
+      fmt = f"{marker}{ls}",
+      **kwargs
+    )
+
+  if errorbands and y_err is not None:
+    color = kwargs.get('color', kwargs.get('c', 'k'))
+    alpha = errorband_alpha * kwargs.get('alpha', 1)
+    plt.fill_between(x, y - y_err, y + y_err, alpha = alpha, color = color, ec = None)
 
 # ==================================================================================================
 
