@@ -18,7 +18,7 @@ plt.rcParams["ytick.labelsize"] = size
 plt.rcParams["legend.fontsize"] = size * 0.75
 
 # Rules for switching to scientific notation in axis tick labels.
-plt.rcParams["axes.formatter.limits"] = (-2, 3)
+plt.rcParams["axes.formatter.limits"] = (-2, 4)
 plt.rcParams["axes.formatter.offset_threshold"] = 3
 plt.rcParams["axes.formatter.use_mathtext"] = True
 
@@ -261,7 +261,8 @@ def plot_color_series(
   special_colors = None,
   cmap = None,
   label = None,
-  alpha = 1
+  alpha = 1,
+  lw = 0.75
 ):
   
   if special_colors is None:
@@ -304,7 +305,7 @@ def plot_color_series(
       plt.scatter(x[i], y[i], color = c, label = label, zorder = zorder, alpha = alpha)
       errorbar(x[i], y[i], y_err[i] if y_err is not None else None, x_err[i] if x_err is not None else None, color = c, ls = "", marker = "none", alpha = alpha, zorder = zorder)
     if line:
-      plt.plot(x[i], y[i], color = c, ls = "-", lw = 0.75, label = label, zorder = zorder, alpha = alpha)
+      plt.plot(x[i], y[i], color = c, ls = "-", lw = lw * (2 if i in special_colors else 1), label = label, zorder = zorder, alpha = alpha)
     if errorband and y_err is not None:
       plt.fill_between(x[i], y[i] - y_err[i], y[i] + y_err[i], fc = c, alpha = alpha * 0.3, zorder = (zorder - 1), label = label)
 
