@@ -150,21 +150,33 @@ def plot(
   """
   
   if line or markers or errorbars:
-    ls = kwargs.get('ls', '-') if line else ''
-    marker = kwargs.get('marker', 'o') if markers else ''
     plt.errorbar(
       x,
       y,
-      y_err,
-      x_err,
-      fmt = f"{marker}{ls}",
-      **kwargs
+      y_err if errorbars else None,
+      x_err if errorbars else None,
+      **{
+        "marker": "o" if markers else "",
+        "ls": "-" if line else "",
+        "elinewidth": 0.5,
+        **kwargs # may also override any of the above defaults
+      }
     )
 
   if errorbands and y_err is not None:
-    color = kwargs.get('color', kwargs.get('c', 'k'))
-    alpha = errorband_alpha * kwargs.get('alpha', 1)
-    plt.fill_between(x, y - y_err, y + y_err, alpha = alpha, color = color, ec = None)
+
+    # only forward select optional arguments to errorband, not all of them
+    errorband_opts = {
+      "alpha": errorband_alpha * kwargs.get("alpha", 1)
+    }
+
+    # only add color keyword argument if specified, otherwise omit for default color cycle
+    for color_key in ("c", "color"):
+      if color_key in kwargs:
+        errorband_opts["fc"] = kwargs[color_key]
+        break
+
+    plt.fill_between(x, y - y_err, y + y_err, **errorband_opts)
 
 # ==================================================================================================
 
