@@ -222,6 +222,7 @@ def colorscale(
   cmap = "coolwarm",
   cticks = None,
   clabel = None,
+  cbar = True,
   **kwargs
 ):
   """
@@ -250,12 +251,16 @@ def colorscale(
     )
 
   # draw colorbar, setting axis label and tick labels
-  colorbar(
-    sm,
-    label = clabel,
-    ticks = np.arange(len(y)),
-    tick_labels = cticks if cticks is not None else np.arange(len(y))
-  )
+  if cbar:
+    colorbar(
+      sm,
+      label = clabel,
+      ticks = np.arange(len(y)),
+      tick_labels = cticks if cticks is not None else np.arange(len(y))
+    )
+
+  # return the ScalarMappable that defines the colorbar, in case drawing colorbar elsewhere
+  return sm
 
 # ==================================================================================================
   
@@ -281,17 +286,34 @@ def grid(
     x_err = [None for _ in range(len(x))]
 
   rows, cols = shape
-  plt.subplots(rows, cols, sharex = share_x, sharey = share_y)
+  fig, axes = plt.subplots(rows, cols, sharex = share_x, sharey = share_y, squeeze = False)
+  axes = axes.flatten()
 
+  vertical_gap = 0.05
   if share_x:
-    plt.subplots_adjust(hspace = 0.05)
+    plt.subplots_adjust(hspace = vertical_gap)
   if share_y:
-    plt.subplots_adjust(wspace = 0.05)
+    height, width = axes[0].bbox.height, axes[0].bbox.width
+    plt.subplots_adjust(wspace = vertical_gap * (height / width))
 
+  sm = None
   for i in range(len(y)):
     plt.subplot(rows, cols, i + 1)
-    plotter(x[i], y[i], y_err[i], x_err[i], **kwargs)
-    # TODO: disable colorbar for all except last plot, and provide specially reserved axes for global colorbar?
+    if plotter == colorscale:
+      # disable individual colorbars in favor of one global colorbar
+      sm = colorscale(x[i], y[i], y_err[i], x_err[i], cbar = False, **kwargs)
+    else:
+      plotter(x[i], y[i], y_err[i], x_err[i], **kwargs)
+      
+  # create global colorbar if there's a non-None ScalarMappable from using style.colorscale
+  if sm is not None:
+    colorbar(
+      sm,
+      axes = axes,
+      label = kwargs.get("clabel", ""),
+      ticks = np.arange(len(y)),
+      tick_labels = kwargs.get("cticks", np.arange(len(y)))
+    )
 
 # ==================================================================================================
 
