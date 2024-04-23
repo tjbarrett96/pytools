@@ -149,8 +149,10 @@ def plot(
   Extra keyword arguments are forwarded to plt.errorbar(...).
   """
 
-  color = None
+  # get color from keyword arguments, if any, or else None
+  color = kwargs.get("color", kwargs.get("c", None))
 
+  # draw line, markers, and/or errorbars
   if line or markers or errorbars:
 
     errorbar_container = plt.errorbar(
@@ -166,10 +168,12 @@ def plot(
       }
     )
 
-    # plt.errorbar always creates a Line2D, even if no line is drawn
+    # remember the color used, so fill_between definitely matches
+    # (plt.errorbar always creates a main Line2D, even if no line is drawn)
     color = errorbar_container.lines[0].get_color()
 
-  if errorbands and y_err is not None:
+  # draw errorbands
+  if errorbands and (y_err is not None):
 
     plt.fill_between(
       x,
