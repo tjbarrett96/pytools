@@ -148,9 +148,12 @@ def plot(
   Simple plot interface combining any optional combination of lines, markers, errorbars, and errorbands.
   Extra keyword arguments are forwarded to plt.errorbar(...).
   """
-  
+
+  color = None
+
   if line or markers or errorbars:
-    plt.errorbar(
+
+    errorbar_container = plt.errorbar(
       x,
       y,
       y_err if errorbars else None,
@@ -163,20 +166,18 @@ def plot(
       }
     )
 
+    # plt.errorbar always creates a Line2D, even if no line is drawn
+    color = errorbar_container.lines[0].get_color()
+
   if errorbands and y_err is not None:
 
-    # only forward select optional arguments to errorband, not all of them
-    errorband_opts = {
-      "alpha": errorband_alpha * kwargs.get("alpha", 1)
-    }
-
-    # only add color keyword argument if specified, otherwise omit for default color cycle
-    for color_key in ("c", "color"):
-      if color_key in kwargs:
-        errorband_opts["fc"] = kwargs[color_key]
-        break
-
-    plt.fill_between(x, y - y_err, y + y_err, **errorband_opts)
+    plt.fill_between(
+      x,
+      y - y_err,
+      y + y_err,
+      fc = color,
+      alpha = errorband_alpha * kwargs.get("alpha", 1)
+    )
 
 # ==================================================================================================
 
