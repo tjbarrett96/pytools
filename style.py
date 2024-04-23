@@ -190,7 +190,7 @@ def colorscale(
   y,
   y_err = None,
   x_err = None,
-  cmap = None,
+  cmap = "coolwarm",
   cticks = None,
   clabel = None,
   **kwargs
@@ -199,6 +199,11 @@ def colorscale(
   Plots multiple series of x- and y-data, provided as lists of arrays, according to the given colormap.
   Each individual series is plotted using style.plot(...), forwarding any extra keyword arguments.
   """
+
+  if y_err is None:
+    y_err = [None for _ in range(len(y))]
+  if x_err is None:
+    x_err = [None for _ in range(len(x))]
 
   # create a colormap and ScalarMappable with as many segments as provided series
   cmap, sm = make_indexed_color_scale(len(y), cmap = cmap)
@@ -209,13 +214,14 @@ def colorscale(
     plot(
       x[i],
       y[i],
-      y_err[i] if y_err is not None else None,
-      x_err[i] if x_err is not None else None,
+      y_err[i],
+      x_err[i],
       color = color,
       **kwargs
     )
 
   # draw colorbar, setting axis label and tick labels
+  # TODO: need to separate this logic to optionally use pre-allocated axes and call separately, for use with style.grid
   cbar = colorbar(sm, label = clabel)
   cbar.ax.tick_params(labelsize = 10)
   all_ticks = np.arange(len(y))
@@ -227,6 +233,42 @@ def colorscale(
   cbar.set_ticks(all_ticks[::tick_step])
   cbar.set_ticklabels(all_tick_labels[::tick_step])
   cbar.minorticks_off()
+
+# ==================================================================================================
+  
+def grid(
+  x,
+  y,
+  y_err = None,
+  x_err = None,
+  shape = None,
+  plotter = plot,
+  share_x = True,
+  share_y = True,
+  **kwargs
+):
+  # TODO: need to get this to work better with style.colorscale by only drawing one global colorbar
+  # TODO: maybe reserve axes in gridspec
+  
+  if shape is None:
+    shape = (len(y), 1)
+  if y_err is None:
+    y_err = [None for _ in range(len(y))]
+  if x_err is None:
+    x_err = [None for _ in range(len(x))]
+
+  rows, cols = shape
+  plt.subplots(rows, cols, sharex = share_x, sharey = share_y)
+
+  if share_x:
+    plt.subplots_adjust(hspace = 0.05)
+  if share_y:
+    plt.subplots_adjust(wspace = 0.05)
+
+  for i in range(len(y)):
+    plt.subplot(rows, cols, i + 1)
+    plotter(x[i], y[i], y_err[i], x_err[i], **kwargs)
+    # TODO: disable colorbar for all except last plot, and provide specially reserved axes for global colorbar?
 
 # ==================================================================================================
 
