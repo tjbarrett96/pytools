@@ -102,11 +102,40 @@ def twinx(shrink = None):
 
 # ==================================================================================================
 
-def colorbar(mappable = None, label = None, pad = 0.01, fraction = 0.10, aspect = 18, **kwargs):
+def colorbar(
+  mappable = None,
+  label = None,
+  ticks = None,
+  tick_labels = None,
+  axes = None,
+  pad = 0.01,
+  fraction = 0.10,
+  aspect = 18,
+  **kwargs
+):
   """Override plt.colorbar with automatic formatting."""
-  cbar = plt.colorbar(mappable = mappable, ax = plt.gca(), pad = pad, fraction = fraction, aspect = aspect, **kwargs)
+
+  cbar = plt.colorbar(
+    mappable = mappable, 
+    ax = axes if axes is not None else plt.gca(),
+    pad = pad,
+    fraction = fraction,
+    aspect = aspect,
+    **kwargs
+  )
+
   if label is not None:
     cbar.set_label(label, ha = "right", y = 1)
+
+  cbar.ax.tick_params(labelsize = 10)
+  tick_step = 1
+  max_ticks = 25
+  if len(ticks) > max_ticks:
+    tick_step = int(np.ceil(len(ticks) / max_ticks))
+  cbar.set_ticks(ticks[::tick_step])
+  cbar.set_ticklabels(tick_labels[::tick_step])
+  cbar.minorticks_off()
+
   return cbar
 
 # ==================================================================================================
@@ -221,18 +250,12 @@ def colorscale(
     )
 
   # draw colorbar, setting axis label and tick labels
-  # TODO: need to separate this logic to optionally use pre-allocated axes and call separately, for use with style.grid
-  cbar = colorbar(sm, label = clabel)
-  cbar.ax.tick_params(labelsize = 10)
-  all_ticks = np.arange(len(y))
-  all_tick_labels = cticks if cticks is not None else np.arange(len(y))
-  tick_step = 1
-  max_ticks = 25
-  if len(all_ticks) > max_ticks:
-    tick_step = int(np.ceil(len(all_ticks) / max_ticks))
-  cbar.set_ticks(all_ticks[::tick_step])
-  cbar.set_ticklabels(all_tick_labels[::tick_step])
-  cbar.minorticks_off()
+  colorbar(
+    sm,
+    label = clabel,
+    ticks = np.arange(len(y)),
+    tick_labels = cticks if cticks is not None else np.arange(len(y))
+  )
 
 # ==================================================================================================
   
