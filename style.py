@@ -184,6 +184,51 @@ def plot(
     )
 
 # ==================================================================================================
+    
+def colorscale(
+  x,
+  y,
+  y_err = None,
+  x_err = None,
+  cmap = None,
+  cticks = None,
+  clabel = None,
+  **kwargs
+):
+  """
+  Plots multiple series of x- and y-data, provided as lists of arrays, according to the given colormap.
+  Each individual series is plotted using style.plot(...), forwarding any extra keyword arguments.
+  """
+
+  # create a colormap and ScalarMappable with as many segments as provided series
+  cmap, sm = make_indexed_color_scale(len(y), cmap = cmap)
+
+  # repeatedly call the indicated plotter function, changing the color according to colormap
+  for i in range(len(y)):
+    color = cmap(i)
+    plot(
+      x[i],
+      y[i],
+      y_err[i] if y_err is not None else None,
+      x_err[i] if x_err is not None else None,
+      color = color,
+      **kwargs
+    )
+
+  # draw colorbar, setting axis label and tick labels
+  cbar = colorbar(sm, label = clabel)
+  cbar.ax.tick_params(labelsize = 10)
+  all_ticks = np.arange(len(y))
+  all_tick_labels = cticks if cticks is not None else np.arange(len(y))
+  tick_step = 1
+  max_ticks = 25
+  if len(all_ticks) > max_ticks:
+    tick_step = int(np.ceil(len(all_ticks) / max_ticks))
+  cbar.set_ticks(all_ticks[::tick_step])
+  cbar.set_ticklabels(all_tick_labels[::tick_step])
+  cbar.minorticks_off()
+
+# ==================================================================================================
 
 def make_unique_legend(extend_x = 0, **kwargs):
   """Show a legend on the current plot, containing only unique labels without duplicates."""
