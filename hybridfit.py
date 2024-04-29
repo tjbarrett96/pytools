@@ -84,6 +84,9 @@ class Expression:
     self.p_cache = None
     self.val_cache = None
 
+    # list of references to sub-expressions involved in adding or multiplying
+    self._sub_exprs = []
+
   # ===============================================================================================
 
   def add_label(self, label: str) -> None:
@@ -127,6 +130,7 @@ class Expression:
     result.parameters = {**self.parameters, **other.parameters}
     result.bounds = {**self.bounds, **other.bounds}
     result.eval = None
+    result._sub_exprs.extend([self, other])
     return result
 
   # ===============================================================================================
@@ -144,6 +148,16 @@ class Expression:
     result = self._merge_skeleton(other)
     result.eval = lambda p, t: self(p, t) * other(p, t)
     return result
+
+  # ================================================================================================
+
+  def clear_cache(self):
+    """Deletes cached numerical arrays to save space (e.g. for pickling)."""
+    self.t_cache = None
+    self.p_cache = None
+    self.val_cache = None
+    for sub_expr in self._sub_exprs:
+      sub_expr.clear_cache()
 
 # Type alias for Expressions or arrays/numbers that can be coerced into Expressions.
 ExpressionLike = (Expression | Callable[..., np.ndarray | np.number] | np.ndarray | np.number)
@@ -695,3 +709,13 @@ class HybridFit:
       f"{prefix}cov_labels": ",".join(self.cov._var2pos),
       f"{prefix}cov": np.array(self.cov).flatten()
     }
+
+  # ================================================================================================
+
+  def save(self, filename: str):
+    """Wrapper for util.save which clears HybridFit's numerical caches to save space."""
+    self.scale.clear_cache()
+    self.const.clear_cache()
+    for term in self.terms.values():
+      term.clear_cache()
+    util.save(self, filename)
