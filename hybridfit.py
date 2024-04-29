@@ -712,10 +712,16 @@ class HybridFit:
 
   # ================================================================================================
 
-  def save(self, filename: str):
-    """Wrapper for util.save which clears HybridFit's numerical caches to save space."""
+  def clear_caches(self):
+    """Clear numerical caches in Expression objects to save space when pickling."""
     self.scale.clear_cache()
     self.const.clear_cache()
     for term in self.terms.values():
       term.clear_cache()
+
+  # ================================================================================================
+
+  def save(self, filename: str):
+    """Wrapper for util.save which clears HybridFit's numerical caches to save space."""
+    self.clear_caches()
     util.save(self, filename)
