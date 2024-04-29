@@ -275,8 +275,6 @@ def grid(
   share_y = True,
   **kwargs
 ):
-  # TODO: need to get this to work better with style.colorscale by only drawing one global colorbar
-  # TODO: maybe reserve axes in gridspec
   
   if shape is None:
     shape = (len(y), 1)
@@ -504,15 +502,10 @@ def plot_color_series(
       plt.fill_between(x[i], y[i] - y_err[i], y[i] + y_err[i], fc = c, alpha = alpha * 0.3, zorder = (zorder - 1), label = label)
 
   if len(y) > 1:
-    cbar = colorbar(sm, label = color_label)
-    cbar.ax.tick_params(labelsize = 10)
-    all_ticks = np.arange(len(y))
-    all_tick_labels = color_ticks if color_ticks is not None else np.arange(len(y))
-    tick_step = 1
-    max_ticks = 25
-    if len(all_ticks) > max_ticks:
-      tick_step = int(np.ceil(len(all_ticks) / max_ticks))
-    cbar.set_ticks(all_ticks[::tick_step])
-    cbar.minorticks_off()
-    cbar.set_ticklabels(all_tick_labels[::tick_step])
+    colorbar(
+      sm,
+      label = color_label,
+      ticks = np.arange(len(y)),
+      tick_labels = color_ticks if color_ticks is not None else np.arange(len(y))
+    )
 
