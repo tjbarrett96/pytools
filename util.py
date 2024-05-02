@@ -106,7 +106,8 @@ def fit_linear_combination(
     terms: list[np.ndarray],
     y: np.ndarray,
     y_err: np.ndarray = None,
-    error_mode: str = None
+    error_mode: str = None,
+    verbose: bool = False
   ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     """
     Returns the array of best-fit coefficients that model the data (y +/- y_err) as a linear
@@ -138,6 +139,10 @@ def fit_linear_combination(
     # set up and solve matrix equation Ax = b
     A = terms @ terms.T
     b = y @ terms.T
+
+    if verbose:
+      print(f"Matrix condition number: {np.linalg.cond(A)}")
+
     result = lg.solve(A, b, assume_a = "sym")
 
     if error_mode is None:
