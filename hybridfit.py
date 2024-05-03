@@ -288,6 +288,9 @@ class HybridFit:
     # covariance matrix of fit parameters
     self.cov = None
 
+    # condition number of linear fit matrix
+    self.cond = None
+
   # ===============================================================================================
   
   def _fix(self, name: str):
@@ -423,7 +426,7 @@ class HybridFit:
   
   # ===============================================================================================
 
-  def _fit_linear_combination(self, p: Mapping[str, float], t: np.ndarray, verbose: bool = False) -> dict[str, float]:
+  def _fit_linear_combination(self, p: Mapping[str, float], t: np.ndarray, return_cond: bool = False) -> dict[str, float]:
     """
     Returns a dictionary of best-fit coefficients for the terms in the linear combination
     which are currently floating.
@@ -433,12 +436,18 @@ class HybridFit:
     err = self.data.y_err if self.cost.mask is None else self.data.y_err[self.cost.mask]
 
     scale, const = self.scale(p, t), self._opt_const(p, t)
-    coeffs = util.fit_linear_combination(
+    result = util.fit_linear_combination(
       [term(p, t) for term in self._opt_terms.values()],
       y / scale - const, # must remove scale and const models from data to isolate linear combination
       err / scale, # dividing by scale model also scales data errorbars, but not subtracting const
-      verbose = verbose
+      return_cond = return_cond
     )
+
+    if return_cond:
+      coeffs, cond = result
+      self.cond = cond
+    else:
+      coeffs = result
 
     return dict(zip(self._opt_terms.keys(), coeffs))
   
@@ -534,7 +543,7 @@ class HybridFit:
       coeffs = self._fit_linear_combination(
         self.minuit.values,
         self.data.x if self.cost.mask is None else self.data.x[self.cost.mask],
-        verbose = True
+        return_cond = True
       )
 
       if len(coeffs) > 0:

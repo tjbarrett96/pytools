@@ -107,7 +107,7 @@ def fit_linear_combination(
     y: np.ndarray,
     y_err: np.ndarray = None,
     error_mode: str = None,
-    verbose: bool = False
+    return_cond: bool = False
   ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     """
     Returns the array of best-fit coefficients that model the data (y +/- y_err) as a linear
@@ -140,13 +140,11 @@ def fit_linear_combination(
     A = terms @ terms.T
     b = y @ terms.T
 
-    if verbose:
-      print(f"Matrix condition number: {np.linalg.cond(A)}")
-
+    cond = np.linalg.cond(A)
     result = lg.solve(A, b, assume_a = "sym")
 
     if error_mode is None:
-      return result
+      return (result if not return_cond else (result, cond))
     else:
       # compute dp_dy matrix for propagation of data uncertainties to parameters
       # lg.solve treats last dimension of 'terms / y_err' as vector, repeats over first dimension (i.e. p)
@@ -154,8 +152,8 @@ def fit_linear_combination(
       if error_mode == "err":
         # shortcut to sqrt(diagonal) of covariance matrix
         result_err = np.sqrt(np.einsum("ki, ki, i -> k", dp_dy, dp_dy, y_err**2))
-        return result, result_err
+        return ((result, result_err) if not return_cond else (result, result_err, cond))
       else:
         # full covariance matrix
         result_cov = np.einsum("ki, li, i -> kl", dp_dy, dp_dy, y_err**2)
-        return result, result_cov
+        return ((result, result_cov) if not return_cond else (result, result_cov, cond))
