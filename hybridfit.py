@@ -655,6 +655,7 @@ class HybridFit:
       ])
 
     print(tab.tabulate(rows, headers, tablefmt = "grid", numalign = "left"))
+    print(f"cond = {(self.cond if self.cond is not None else 1):.1f}")
     print(f"chi2 = {self.chi2:.4f} +/- {self.chi2_err:.4f}")
     print(f"chi2/ndf = {self.chi2ndf:.4f} +/- {self.chi2ndf_err:.4f}")
     pval_format = ".4f" if util.order_of_magnitude(self.pval) > -4 else ".1e"
