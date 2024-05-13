@@ -140,7 +140,12 @@ def fit_linear_combination(
     A = terms @ terms.T
     b = y @ terms.T
 
-    cond = np.linalg.cond(A) if len(A) > 0 else None
+    cond = None
+    if len(A) > 0:
+      try:
+        cond = np.linalg.cond(A)
+      except np.linalg.LinAlgError:
+        cond = -1
     result = lg.solve(A, b, assume_a = "sym")
 
     if error_mode is None:
