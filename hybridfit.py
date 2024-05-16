@@ -224,7 +224,8 @@ class HybridFit:
       raise ValueError("Must provide at least one of 'scale', 'terms', or 'const'.")
     
     self.data = data
-    
+    self.metadata = {}
+
     self.scale = scale if scale is not None else 1
     self.scale = util.ensure_type(self.scale, Expression)
 
@@ -562,9 +563,21 @@ class HybridFit:
           print("Running HESSE.")
         self.hesse()
 
-      self.cov = self.minuit.covariance
+      self.cov = self.minuit.covariance.to_dict()
+      
+      for parameter in self.minuit.parameters:
+        for other in self.minuit.parameters:
+          if (parameter, other) not in self.cov:
+            self.cov[parameter, other] = self.cov[other, parameter]
+
       self.errors = self.minuit.errors.to_dict()
 
+      for parameter in self.minuit.parameters:
+        if self.fixed[parameter] or self.is_constrained(parameter):
+          self.errors[parameter] = 0
+          for other in self.minuit.parameters:
+            self.cov[parameter, other] = 0
+     
       # TODO: is it right to not count fixed parameters in NDF after some rounds of optimizing them?
       # TODO: sometimes chi2 goes down a little, but chi2/ndf goes up a little after freeing lots of parameters in last step
       self.ndf = self.cost.ndata - (self.minuit.nfit + len(self._opt_terms))
@@ -701,6 +714,7 @@ class HybridFit:
       prefix = f"{prefix}_"
     fft_x, fft_y = self.fft()
     return {
+      **self.metadata,
       f"{prefix}fit_chi2": self.chi2,
       f"{prefix}fit_chi2_err": self.chi2_err,
       f"{prefix}fit_ndf": self.ndf,
@@ -708,9 +722,9 @@ class HybridFit:
       f"{prefix}fit_chi2ndf_err": self.chi2ndf_err,
       f"{prefix}fit_pvalue": self.pval,
       **{f"{prefix}{name}": value for name, value in self.minuit.values.to_dict().items()},
-      **{f"{prefix}{name}_err": error for name, error in self.minuit.errors.to_dict().items()},
-      **{f"{prefix}{name}_err": -1.0 for name in self.minuit.parameters if self.is_constrained(name)},
-      **{f"{prefix}{name}_err": -2.0 for name in self.minuit.parameters if self.fixed[name]},
+      **{f"{prefix}{name}_err": error for name, error in self.errors.items()},
+      #**{f"{prefix}{name}_err": 0 for name in self.minuit.parameters if self.is_constrained(name)},
+      #**{f"{prefix}{name}_err": 0 for name in self.minuit.parameters if self.fixed[name]},
       **{f"{prefix}{name}_valid": (not self.at_limit(name) and self.minuit.fmin.has_accurate_covar) for name in self.minuit.parameters},
       f"{prefix}fit_x": self.data.x,
       f"{prefix}fit_y": self.data.y,
@@ -722,8 +736,8 @@ class HybridFit:
       f"{prefix}fit_fft_y": fft_y,
       f"{prefix}fit_converged": self.minuit.fmin.is_valid,
       f"{prefix}err_accurate": self.minuit.fmin.has_accurate_covar,
-      f"{prefix}cov_labels": ",".join(self.cov._var2pos),
-      f"{prefix}cov": np.array(self.cov).flatten()
+      f"{prefix}cov_labels": ",".join(self.minuit.parameters),
+      f"{prefix}cov": np.array([self.cov[i, j] for j in self.minuit.parameters for i in self.minuit.parameters])
     }
 
   # ================================================================================================
