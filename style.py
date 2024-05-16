@@ -359,13 +359,13 @@ def label_and_save(x_label, y_label, output, **legend_kwargs):
 #     units = "" if self.units is None else (rf"\;\text{{{self.units}}}" if align else f" {self.units}")
 #     return rf"{m}{self.sym}{m} {amp}= {self.val:.{places}f}{err}{units}"
 
-def databox(*entries, left = True, **kwargs):
+def databox(*entries, left = True, top = True, **kwargs):
   plt.text(
     0.03 if left else 0.97,
-    0.96,
+    0.96 if top else 0.04,
     "\n".join(entries),
     ha = "left" if left else "right",
-    va = "top",
+    va = "top" if top else "bottom",
     transform = plt.gca().transAxes,
     bbox = {
       "alpha": plt.rcParams["legend.framealpha"],
