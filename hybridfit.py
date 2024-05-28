@@ -7,6 +7,7 @@ import iminuit
 from iminuit.cost import LeastSquares
 
 import pytools.util as util
+from pytools.data import Data
 
 import tabulate as tab
 
@@ -17,15 +18,15 @@ from typing import Callable, Self
 
 # =================================================================================================
 
-@dataclass
-# TODO: consider making NamedTuple instead? then supports both member access and ordered unpacking
-#       e.g. for plotting API that takes plot(x, y, y_err), can do plot(*data)
-class Data:
-  """Simple container for x-values, y-values, and optional errorbars."""
-  x: np.ndarray
-  y: np.ndarray
-  y_err: np.ndarray = None
-  x_err: np.ndarray = None
+# @dataclass
+# # TODO: consider making NamedTuple instead? then supports both member access and ordered unpacking
+# #       e.g. for plotting API that takes plot(x, y, y_err), can do plot(*data)
+# class Data:
+#   """Simple container for x-values, y-values, and optional errorbars."""
+#   x: np.ndarray
+#   y: np.ndarray
+#   y_err: np.ndarray = None
+#   x_err: np.ndarray = None
 
 # =================================================================================================
 
@@ -570,13 +571,15 @@ class HybridFit:
           if (parameter, other) not in self.cov:
             self.cov[parameter, other] = self.cov[other, parameter]
 
+      self.cov = {p1: {p2: self.cov[p1, p2] for p2 in self.minuit.parameters} for p1 in self.minuit.parameters}
+
       self.errors = self.minuit.errors.to_dict()
 
       for parameter in self.minuit.parameters:
         if self.fixed[parameter] or self.is_constrained(parameter):
           self.errors[parameter] = 0
           for other in self.minuit.parameters:
-            self.cov[parameter, other] = 0
+            self.cov[parameter][other] = 0
      
       # TODO: is it right to not count fixed parameters in NDF after some rounds of optimizing them?
       # TODO: sometimes chi2 goes down a little, but chi2/ndf goes up a little after freeing lots of parameters in last step
@@ -736,8 +739,9 @@ class HybridFit:
       f"{prefix}fit_fft_y": fft_y,
       f"{prefix}fit_converged": self.minuit.fmin.is_valid,
       f"{prefix}err_accurate": self.minuit.fmin.has_accurate_covar,
-      f"{prefix}cov_labels": ",".join(self.minuit.parameters),
-      f"{prefix}cov": np.array([self.cov[i, j] for j in self.minuit.parameters for i in self.minuit.parameters])
+      f"{prefix}cov": self.cov
+      #f"{prefix}cov_labels": ",".join(self.minuit.parameters),
+      #f"{prefix}cov": np.array([self.cov[i, j] for j in self.minuit.parameters for i in self.minuit.parameters])
     }
 
   # ================================================================================================
