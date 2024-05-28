@@ -20,10 +20,20 @@ def collect_dict_values_as_lists(*dicts):
   Merges a list of dictionaries with the same key-value structure into one dictionary
   with a list of values for each key.
   """
-  return {
+  
+  keys = dicts[0].keys() if len(dicts) > 0 else [] 
+  
+  result = {
     key: [dictionary[key] for dictionary in dicts]
-    for key in dicts[0]
+    for key in keys
   }
+  
+  # wrap 1D lists of numbers as NumPy arrays
+  for key in result:
+    if is_numeric_list(result[key]):
+      result[key] = np.array(result[key])
+  
+  return result
 
 # ==================================================================================================
   
@@ -67,6 +77,11 @@ def is_iterable(obj):
     return False
 
 # ==================================================================================================
+
+def is_numeric_list(obj):
+  return is_iterable(obj) and all((np.issubdtype(type(x), np.number) or np.issubdtype(type(x), bool)) for x in obj)
+
+# ==================================================================================================
   
 def save(obj: object, filename: str) -> None:
   """Saves given object to given filename using dill (pickle) module."""
@@ -76,10 +91,11 @@ def save(obj: object, filename: str) -> None:
 
 # ==================================================================================================
     
-def load(filename: str) -> object:
+def load(filename: str, key: str = None) -> object:
   """Loads object from given filename using dill (pickle) module."""
   with open(filename, "rb") as input_file:
-    return dill.load(input_file)
+    data = dill.load(input_file)
+    return data[key] if key is not None else data
 
 # ==================================================================================================
   
@@ -102,13 +118,14 @@ def p_value(chi2: float, ndf: int) -> float:
 
 # ==================================================================================================
 
+# TODO: generalize to use data covariance matrix
 def fit_linear_combination(
     terms: list[np.ndarray],
     y: np.ndarray,
     y_err: np.ndarray = None,
     error_mode: str = None,
     return_cond: bool = False
-  ) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+  ) -> np.ndarray:
     """
     Returns the array of best-fit coefficients that model the data (y +/- y_err) as a linear
     combination of the given terms, provided as a list of arrays [y0, y1, ...]. Optionally,
