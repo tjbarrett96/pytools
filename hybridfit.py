@@ -253,10 +253,11 @@ class HybridFit:
         raise ValueError(f"Linear coefficient '{coeff}' cannot also appear in nonlinear parameters.")
 
     # merge parameter guesses and bounds from all component expressions
-    self.parameters = {**self.scale.parameters, **self.const.parameters}
+    self.parameters = {**self.scale.parameters}
+    self.parameters.update({k: v for k, v in self.const.parameters.items() if k not in self.parameters})
     self.bounds = {**self.scale.bounds, **self.const.bounds}
     for name, term in self.terms.items():
-      self.parameters.update({**term.parameters, name: 0})
+      self.parameters.update({**{k: v for k, v in term.parameters.items() if k not in self.parameters}, name: 0})
       self.bounds.update(term.bounds)
     
     # mapping of nonlinear parameter(s) to Constraint(s), which only allows other nonlinear parameters
@@ -300,19 +301,24 @@ class HybridFit:
     if (name not in self.terms) and (name not in self._nonlinear_constraints):
       self.minuit.fixed[name] = True
 
-  def fix(self, *names: str):
+  def fix(self, *options: str | dict[str, float]):
     """
     Fix given parameter(s) at current value(s). Supports Unix-style wildcards, e.g. "x_*" will fix
     "x_1", "x_2", etc. Constrained parameter values will be frozen too.
     """
-    if len(names) == 0:
+    if len(options) == 0:
       for parameter in self.parameters:
         self._fix(parameter)
     else:
-      for name in names:
-        for parameter in self.parameters:
-          if fnmatch.fnmatch(parameter, name):
-            self._fix(parameter)
+      for option in options:
+        if not isinstance(option, dict):
+          option = {option: None}
+        for name, value in option.items():
+          if value is not None:
+            self.minuit.values[name] = value
+          for parameter in self.parameters:
+            if fnmatch.fnmatch(parameter, name):
+              self._fix(parameter)
 
   # ===============================================================================================
   
@@ -500,7 +506,7 @@ class HybridFit:
 
   # ===============================================================================================
 
-  def fit(self, verbose = True, max_iterations = 5, hesse = True):
+  def fit(self, verbose = True, max_iterations = 3, hesse = True):
     """Runs chi-squared minimization and covariance estimation for floating parameters."""
 
     self._opt_terms = {name: value for name, value in self.terms.items()}
@@ -595,7 +601,7 @@ class HybridFit:
         self.print()
 
       # re-evaluate fit quality after running HESSE
-      if not (self.minuit.fmin.is_valid and self.minuit.fmin.has_accurate_covar):
+      if not (self.minuit.fmin.is_valid and self.minuit.fmin.has_accurate_covar) and not all(self.minuit.fixed):
         if verbose:
           print(f"Minuit is unhappy with fit validity after HESSE. Repeating minimization.")
         iterations += 1
@@ -655,8 +661,10 @@ class HybridFit:
       error_order = util.order_of_magnitude(error)
       # TODO: sort out decimal/scientific notation appearance based on sig figs / desired order limits
       decimals = 4
-      # if error_order < 0:
-      #   decimals = abs(error_order) + 1
+      if error_order < 0:
+        new_decimals = abs(error_order) + 2
+        if new_decimals > decimals:
+          decimals = new_decimals
       rows.append([
         i,
         name,
