@@ -127,14 +127,15 @@ def colorbar(
   if label is not None:
     cbar.set_label(label, ha = "right", y = 1)
 
-  cbar.ax.tick_params(labelsize = 10)
-  tick_step = 1
-  max_ticks = 25
-  if len(ticks) > max_ticks:
-    tick_step = int(np.ceil(len(ticks) / max_ticks))
-  cbar.set_ticks(ticks[::tick_step])
-  cbar.set_ticklabels(tick_labels[::tick_step])
-  cbar.minorticks_off()
+  if ticks is not None:
+    cbar.ax.tick_params(labelsize = 10)
+    tick_step = 1
+    max_ticks = 25
+    if len(ticks) > max_ticks:
+      tick_step = int(np.ceil(len(ticks) / max_ticks))
+    cbar.set_ticks(ticks[::tick_step])
+    cbar.set_ticklabels(tick_labels[::tick_step])
+    cbar.minorticks_off()
 
   return cbar
 
@@ -260,7 +261,7 @@ def colorscale(
     )
 
   # return the ScalarMappable that defines the colorbar, in case drawing colorbar elsewhere
-  return sm
+  return cmap, sm
 
 # ==================================================================================================
   
@@ -509,3 +510,24 @@ def plot_color_series(
       tick_labels = color_ticks if color_ticks is not None else np.arange(len(y))
     )
 
+# ==================================================================================================
+    
+def plot_cov(cov, labels = None, remove_nan = True, cmap = "coolwarm", fontsize = 5):
+
+  errors = np.sqrt(np.diag(cov))
+  if remove_nan:
+    mask = (errors != 0)
+  else:
+    mask = np.ones(len(errors), dtype = bool)
+
+  corr = cov[mask, :][:, mask] / np.outer(errors[mask], errors[mask])
+
+  plt.imshow(corr, cmap = cmap, vmin = -1, vmax = 1)
+  colorbar()
+
+  if labels is not None:
+    masked_labels = [labels[i] for i in range(len(labels)) if mask[i]]
+    plt.xticks(np.arange(len(masked_labels)), masked_labels, rotation = 90, fontsize = fontsize)
+    plt.yticks(np.arange(len(masked_labels)), masked_labels, fontsize = fontsize)
+
+  plt.gca().minorticks_off()
