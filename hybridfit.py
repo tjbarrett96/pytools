@@ -89,6 +89,11 @@ class Expression:
     self._sub_exprs = []
 
   # ===============================================================================================
+  
+  def copy(self):
+    return Expression(self._function, self.parameters, self.bounds)
+
+  # ===============================================================================================
 
   def add_label(self, label: str) -> None:
     """Append underscore and label string to each parameter name."""
