@@ -3,6 +3,7 @@ import numpy as np
 import scipy.linalg as lg
 import dill
 import os
+import re
 
 # ==================================================================================================
 
@@ -65,6 +66,25 @@ def str_to_bool(string):
     return False
   else:
     raise ValueError("Boolean string must be either 'true' or 'false'.")
+
+# ==================================================================================================
+  
+# use regex to check if argument is a list of the form range(start,end,step) or [item1;item2;...]
+regex_number = r"\s*([+-]?(?:[0-9]*[.])?[0-9]+)\s*"
+regex_range = fr"range\({regex_number},{regex_number},{regex_number}\)"
+regex_list = r"\[(.*)\]"
+
+def parse_as_list(string, type = None):
+  
+  if type is None:
+    type = (lambda x: x)
+
+  if (match_range := re.match(regex_range, str(string))):
+    return list(np.arange(*[float(n) for n in match_range.groups()]))
+  elif (match_list := re.match(regex_list, str(string))):
+    return [parse_as_list(item.strip(), type) for item in match_list.group(1).split(";")]
+  else:
+    return [type(string)]
 
 # ==================================================================================================
   
