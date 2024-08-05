@@ -177,10 +177,11 @@ class Constraint(Expression):
     super().__init__(None)
     self.parameters = {parameter: None for parameter in parameters}
     self.constraint = constraint
+    #self.signature = inspect.signature(constraint).parameters
 
   def eval(self, p: Mapping[str, float], t: np.ndarray = None) -> float:
-    # restrict parameter dictionary to only the declared dependent parameters
     try:
+      # restrict parameter dictionary to only the declared dependent parameters
       return self.constraint(*[p[key] for key in self.parameters])
     except KeyError as error:
       error.add_note("Constraint cannot use undeclared parameter.")
@@ -383,10 +384,26 @@ class HybridFit:
 
         raise ValueError(f"Unrecognized constraint for parameter '{name}'.")
 
+    # sort nonlinear constraint dictionary so that nested constraints are applied last, after dependencies updated
+    independent_constraints = {}
+    dependent_constraints = {}
+    for name, constraint in self._nonlinear_constraints.items():
+      dependent = False
+      for dependency in constraint.parameters:
+        if dependency in self._nonlinear_constraints:
+          dependent_constraints[name] = constraint
+          dependent = True
+          break 
+      if not dependent:
+        independent_constraints[name] = constraint
+    self._nonlinear_constraints = {**independent_constraints, **dependent_constraints}
+
   # ===============================================================================================
       
   def unconstrain(self, *names):
     """Remove any constraint relationships from given parameter names."""
+    if len(names) == 0:
+      names = self.minuit.parameters
     for name in names:
       if name in self._nonlinear_constraints:
         del self._nonlinear_constraints[name]
@@ -570,26 +587,28 @@ class HybridFit:
           print("Running HESSE.")
         self.hesse()
 
-      self.cov = self.minuit.covariance.to_dict()
+      #self.cov = self.minuit.covariance.to_dict()
+      self.cov = self.minuit.covariance
       
-      for parameter in self.minuit.parameters:
-        for other in self.minuit.parameters:
-          if (parameter, other) not in self.cov:
-            self.cov[parameter, other] = self.cov[other, parameter]
+      #for parameter in self.minuit.parameters:
+      #  for other in self.minuit.parameters:
+      #    if (parameter, other) not in self.cov:
+      #      self.cov[parameter, other] = self.cov[other, parameter]
 
-      self.cov = {p1: {p2: self.cov[p1, p2] for p2 in self.minuit.parameters} for p1 in self.minuit.parameters}
+      #self.cov = {p1: {p2: self.cov[p1, p2] for p2 in self.minuit.parameters} for p1 in self.minuit.parameters}
 
       self.errors = self.minuit.errors.to_dict()
 
       for parameter in self.minuit.parameters:
         if self.fixed[parameter] or self.is_constrained(parameter):
           self.errors[parameter] = 0
-          for other in self.minuit.parameters:
-            self.cov[parameter][other] = 0
+          #for other in self.minuit.parameters:
+          #  self.cov[parameter, other] = 0
      
       # TODO: is it right to not count fixed parameters in NDF after some rounds of optimizing them?
       # TODO: sometimes chi2 goes down a little, but chi2/ndf goes up a little after freeing lots of parameters in last step
-      self.ndf = self.cost.ndata - (self.minuit.nfit + len(self._opt_terms))
+      self.npar = (self.minuit.nfit + len(self._opt_terms))
+      self.ndf = self.cost.ndata - self.npar
       self.chi2 = self.minuit.fval
       self.chi2_err = np.sqrt(2 * self.ndf)
       self.chi2ndf = self.chi2 / self.ndf
@@ -649,8 +668,11 @@ class HybridFit:
     """Prints fit convergence status/warnings, table of parameter information, and chi-squared/p-value."""
 
     print()
-    self.check_minimum(verbose = True)
-    print(f"Time spent: {self.minuit.fmin.time:.6f} seconds.")
+    try:
+      self.check_minimum(verbose = True)
+      print(f"Time spent: {self.minuit.fmin.time:.6f} seconds.")
+    except:
+      print("Fit has not yet been optimized.")
 
     headers = ["index", "name", "value", "error", "limit-", "limit+", "type", "status"]
     rows = []
@@ -680,6 +702,7 @@ class HybridFit:
 
     print(tab.tabulate(rows, headers, tablefmt = "grid", numalign = "left"))
     print(f"cond = {(self.cond if self.cond is not None else 1):.1f}")
+    print(f"npar = {self.npar}")
     print(f"chi2 = {self.chi2:.4f} +/- {self.chi2_err:.4f}")
     print(f"chi2/ndf = {self.chi2ndf:.4f} +/- {self.chi2ndf_err:.4f}")
     pval_format = ".4f" if util.order_of_magnitude(self.pval) > -4 else ".1e"
@@ -747,7 +770,8 @@ class HybridFit:
       f"{prefix}fit_fft_y": fft_y,
       f"{prefix}fit_converged": self.minuit.fmin.is_valid,
       f"{prefix}err_accurate": self.minuit.fmin.has_accurate_covar,
-      f"{prefix}cov": self.cov
+      f"{prefix}cov": np.array(self.cov),
+      f"{prefix}cov_labels": list(self.minuit.parameters)
       #f"{prefix}cov_labels": ",".join(self.minuit.parameters),
       #f"{prefix}cov": np.array([self.cov[i, j] for j in self.minuit.parameters for i in self.minuit.parameters])
     }
