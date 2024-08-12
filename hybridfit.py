@@ -91,19 +91,30 @@ class Expression:
   # ===============================================================================================
   
   def copy(self):
-    return Expression(self._function, self.parameters, self.bounds)
+    #return Expression(self._function, self.parameters, self.bounds)
+    result = Expression(None)
+    result.parameters = {**self.parameters}
+    result.bounds = {**self.bounds}
+    # TODO: this assignment below might not work right, will it permanently bind current 'self' reference to result method call?
+    result.eval = self.eval
+    return result
 
   # ===============================================================================================
 
-  def add_label(self, label: str) -> None:
+  def add_label(self, label: str, only: list[str] = None) -> None:
     """Append underscore and label string to each parameter name."""
+    
+    # if list of restricted names supplied, check that a name matches one of the supplied prefixes
+    should_modify = lambda name: True if (only is None) else any(name.startswith(prefix) for prefix in only)
+   
     if label is not None:
-      self.parameters = {f"{name}_{label}": value for name, value in self.parameters.items()}
-      self.bounds = {f"{name}_{label}": value for name, value in self.bounds.items()}
+      self.parameters = {f"{name}{f'_{label}' if should_modify(name) else ''}": value for name, value in self.parameters.items()}
+      self.bounds = {f"{name}{f'_{label}' if should_modify(name) else ''}": value for name, value in self.bounds.items()}
+
     return self
 
   # ===============================================================================================
- 
+
   # TODO: add strict_cache = True option to check 't' element-wise, disable for looser size/range checking
   # TODO: need to keep this eval to use special arg, instead of replacing in __mul__ etc. below
   # TODO: so modification to __add__ and __mul__ needed
@@ -111,8 +122,9 @@ class Expression:
     """Evaluate expression from global parameter dictionary using this expression's known parameter names."""
     args = [p[name] for name in self.parameters]
     #t_same = (t == self.t_cache).all()
-    t_same = (self.t_cache is not None and len(t) == len(self.t_cache) and t[0] == self.t_cache[0] and t[-1] == self.t_cache[-1])
+    t_same = (self.t_cache is not None and len(t) == len(self.t_cache))# and t[0] == self.t_cache[0] and t[-1] == self.t_cache[-1])
     if t_same and (args == self.p_cache):
+    #if args == self.p_cache:
       return self.val_cache
     else:
       result = self._function(t, *args)
@@ -300,6 +312,9 @@ class HybridFit:
     # condition number of linear fit matrix
     self.cond = None
 
+    # extra parameters to include in NDF
+    self.ndf_modifier = 0
+
   # ===============================================================================================
   
   def _fix(self, name: str):
@@ -450,7 +465,8 @@ class HybridFit:
     scale, const = self.scale(p, t), self.const(p, t)
     term_total = 0
     for name, term in self.terms.items():
-      term_total += p[name] * term(p, t)
+      if p[name] != 0:
+        term_total += p[name] * term(p, t)
 
     return scale * (const + term_total)
   
@@ -497,6 +513,8 @@ class HybridFit:
       if not self.fixed[name]:
         p[name] = constraint(p)
 
+    #print(self._opt_terms.keys())
+
     # optimize linear coefficient parameters
     if self._fit_linear:
       coeffs = self._fit_linear_combination(p, t)
@@ -537,7 +555,8 @@ class HybridFit:
     # absorb fixed terms as part of the constant with no coefficient, and remove from system
     for name in self.terms:
       if self.fixed[name]:
-        self._opt_const = self._opt_const + util.ensure_type(self.minuit.values[name], Expression) * self.terms[name]
+        if self.minuit.values[name] != 0:
+          self._opt_const = self._opt_const + util.ensure_type(self.minuit.values[name], Expression) * self.terms[name]
         del self._opt_terms[name]
 
     # after fixed terms removed, modify system of terms according to any linear constraints
@@ -612,7 +631,7 @@ class HybridFit:
      
       # TODO: is it right to not count fixed parameters in NDF after some rounds of optimizing them?
       # TODO: sometimes chi2 goes down a little, but chi2/ndf goes up a little after freeing lots of parameters in last step
-      self.npar = (self.minuit.nfit + len(self._opt_terms))
+      self.npar = (self.minuit.nfit + len(self._opt_terms)) + self.ndf_modifier
       self.ndf = self.cost.ndata - self.npar
       self.chi2 = self.minuit.fval
       self.chi2_err = np.sqrt(2 * self.ndf)
@@ -706,12 +725,15 @@ class HybridFit:
       ])
 
     print(tab.tabulate(rows, headers, tablefmt = "grid", numalign = "left"))
-    print(f"cond = {(self.cond if self.cond is not None else 1):.1f}")
-    print(f"npar = {self.npar}")
-    print(f"chi2 = {self.chi2:.4f} +/- {self.chi2_err:.4f}")
-    print(f"chi2/ndf = {self.chi2ndf:.4f} +/- {self.chi2ndf_err:.4f}")
-    pval_format = ".4f" if util.order_of_magnitude(self.pval) > -4 else ".1e"
-    print(f"p-value = {self.pval:{pval_format}}")
+    try:
+      print(f"cond = {(self.cond if self.cond is not None else 1):.1f}")
+      print(f"npar = {self.npar}")
+      print(f"chi2 = {self.chi2:.4f} +/- {self.chi2_err:.4f}")
+      print(f"chi2/ndf = {self.chi2ndf:.4f} +/- {self.chi2ndf_err:.4f}")
+      pval_format = ".4f" if util.order_of_magnitude(self.pval) > -4 else ".1e"
+      print(f"p-value = {self.pval:{pval_format}}")
+    except:
+      pass
     print()
 
   # ===============================================================================================
