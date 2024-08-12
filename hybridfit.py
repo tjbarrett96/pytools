@@ -1,4 +1,5 @@
 import numpy as np
+import scipy.stats as stats
 from typing import Mapping, Callable
 from dataclasses import dataclass
 import functools
@@ -362,6 +363,14 @@ class HybridFit:
         for parameter in self.parameters:
           if fnmatch.fnmatch(parameter, name):
             self._free(parameter)
+
+  # ===============================================================================================
+
+  def mask(self, condition: np.ndarray):
+    self.cost.mask(condition)
+
+  def unmask(self):
+    self.cost.mask = None
 
   # ===============================================================================================
         
@@ -767,6 +776,30 @@ class HybridFit:
     fft[1:] *= 2
     frequencies = np.fft.rfftfreq(len(pulls), self.data.x[1] - self.data.x[0])
     return frequencies, fft
+
+  # ===============================================================================================
+
+  def f_test(self, parameters: dict[str, float]) -> float:
+
+    prev_values = {name: self.minuit.values[name] for name in parameters}
+
+    self.fix(parameters)
+    self.fit()
+    prev_chi2 = self.chi2
+
+    self.free(*parameters)
+    for name in prev_values:
+      self.minuit.values[name] = prev_values[name]
+    self.fit()
+    new_chi2 = self.chi2
+
+    ndf_num = len(parameters)
+    ndf_den = self.ndf
+
+    F = ((prev_chi2 - new_chi2) / ndf_num) / (new_chi2 / ndf_den)
+    F_pval = stats.f.sf(F, ndf_num, ndf_den)
+
+    return F_pval
 
   # ===============================================================================================
 
