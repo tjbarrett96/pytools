@@ -1,0 +1,58 @@
+
+# font
+axes.titlesize: 14
+font.size: 12
+axes.labelsize: 12
+xtick.labelsize: 12
+ytick.labelsize: 12
+legend.fontsize: 12
+
+# figure layout
+figure.figsize: 8, 5
+figure.dpi: 100
+figure.subplot.wspace: 0.3
+figure.subplot.hspace: 0.3
+figure.subplot.top: 0.93
+figure.subplot.right: 0.95
+figure.subplot.left: 0.125
+
+# axes
+xtick.major.size: 8
+xtick.minor.size: 4
+ytick.major.size: 8
+ytick.minor.size: 4
+xtick.minor.visible: True
+ytick.minor.visible: True
+xtick.top: True
+ytick.right: True
+xtick.direction: in
+ytick.direction: in
+
+# grid
+axes.grid: True
+grid.alpha: 0.25
+
+# legend
+legend.borderaxespad: 1
+legend.handlelength: 1
+legend.columnspacing: 1.4
+legend.handletextpad: 0.6
+legend.framealpha: 0.6
+
+# histograms
+hist.bins: auto
+patch.linewidth: 0.5
+patch.edgecolor: black
+patch.force_edgecolor: True
+
+# lines
+lines.markersize: 5
+lines.linewidth: 1
+
+# plots
+errorbar.capsize : 0
+
+# formatter
+axes.formatter.limits: -2, 4
+axes.formatter.offset_threshold: 3
+axes.formatter.use_mathtext: True

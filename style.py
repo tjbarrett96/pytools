@@ -3,90 +3,35 @@ import matplotlib as mpl
 from matplotlib.backends.backend_pdf import PdfPages
 import numpy as np
 import os
+import pathlib
 
 import pytools.util as util
 
 # ==================================================================================================
 
-# Font options.
-size = 14
-plt.rcParams["font.size"] = size * 0.75
-plt.rcParams["axes.labelsize"] = size
-plt.rcParams["axes.titlesize"] = size
-plt.rcParams["xtick.labelsize"] = size
-plt.rcParams["ytick.labelsize"] = size
-plt.rcParams["legend.fontsize"] = size * 0.75
-
-# Rules for switching to scientific notation in axis tick labels.
-plt.rcParams["axes.formatter.limits"] = (-2, 4)
-plt.rcParams["axes.formatter.offset_threshold"] = 3
-plt.rcParams["axes.formatter.use_mathtext"] = True
-
-# Marker and line options.
-plt.rcParams["lines.markersize"] = 5
-plt.rcParams["lines.linewidth"] = 1
-
-# Draw grid.
-plt.rcParams["axes.grid"] = True
-plt.rcParams["grid.alpha"] = 0.25
-
-# Default figure size.
-plt.rcParams["figure.figsize"] = 8, 5
-plt.rcParams["figure.dpi"] = 100
-
-# Make axis tick marks face inward.
-plt.rcParams["xtick.direction"] = "in"
-plt.rcParams["ytick.direction"] = "in"
-
-# Draw axis tick marks all around the edges.
-plt.rcParams["xtick.top"] = True
-plt.rcParams["ytick.right"] = True
-
-# Draw minor axis tick marks in between major labels.
-plt.rcParams["xtick.minor.visible"] = True
-plt.rcParams["ytick.minor.visible"] = True
-
-# Make all tick marks longer.
-plt.rcParams["xtick.major.size"] = 8
-plt.rcParams["xtick.minor.size"] = 4
-plt.rcParams["ytick.major.size"] = 8
-plt.rcParams["ytick.minor.size"] = 4
-
-# Dynamically choose the number of histogram bins.
-plt.rcParams["hist.bins"] = "auto"
-
-# Space between axes and legend, in font units.
-plt.rcParams["legend.borderaxespad"] = 1
-plt.rcParams["legend.handlelength"] = 1
-plt.rcParams["legend.columnspacing"] = 1.4
-plt.rcParams["legend.handletextpad"] = 0.6
-plt.rcParams["legend.framealpha"] = 0.6
-
-# Default subplot spacing.
-plt.rcParams["figure.subplot.wspace"] = 0.3
-plt.rcParams["figure.subplot.hspace"] = 0.3
-plt.rcParams["figure.subplot.top"] = 0.93
-plt.rcParams["figure.subplot.right"] = 0.93
+# mpl.use("Cairo")
+plt.style.use(f"{util.path}/gm2.mplstyle")
+#plt.style.use(f"{util.path}/custom.mplstyle")
 
 # ==================================================================================================
 
-def xlabel(label: str, offset: float = 0) -> None:
+def xlabel(label: str, offset: float = 0, va: str = "bottom", **kwargs) -> None:
   """
   Override plt.xlabel with right-alignment.
   :param label: Label for x-axis.
   :param offset: Offset from right edge, as a fraction of the axes width.
   """
-  return plt.xlabel(label, ha = "right", x = 1 - offset)
+  return plt.xlabel(label, ha = "right", va = va, x = 1 - offset, y = 0, **kwargs)
 
 # ==================================================================================================
 
-def ylabel(label: str, offset: float = 0) -> None:
+def ylabel(label: str, offset: float = 0, va: str = "top", **kwargs) -> None:
   """
   Override plt.ylabel with top-alignment.
   :param label: Label for y-axis.
   :param offset: Offset from top edge, as a fraction of the axes width.
   """
-  return plt.ylabel(label, ha = "right", y = 1 - offset)
+  return plt.ylabel(label, ha = "right", va = va, y = 1 - offset, x = 0, **kwargs)
 
 # ==================================================================================================
 
@@ -95,10 +40,10 @@ def twinx(shrink = None):
   Switch plotting to y-axis on right side of plot, without duplicating grid lines.
   :param shrink: Amount of space to add for right-side y-axis, as a fraction of the axes width.
   """
-  plt.twinx()
-  plt.grid(False)
   if shrink is not None:
     plt.subplots_adjust(right = plt.gca().get_position().xmax - shrink)
+  plt.twinx()
+  plt.grid(False)
 
 # ==================================================================================================
 
@@ -108,9 +53,10 @@ def colorbar(
   ticks = None,
   tick_labels = None,
   axes = None,
-  pad = 0.01,
-  fraction = 0.10,
+  pad = 0,
+  fraction = 0.07,
   aspect = 18,
+  right_adjust = 0.05,
   **kwargs
 ):
   """Override plt.colorbar with automatic formatting."""
@@ -125,7 +71,7 @@ def colorbar(
   )
 
   if label is not None:
-    cbar.set_label(label, ha = "right", y = 1)
+    cbar.set_label(label, ha = "right", va = "bottom", y = 1, x = 0)
 
   if ticks is not None:
     cbar.ax.tick_params(labelsize = 10)
@@ -136,6 +82,9 @@ def colorbar(
     cbar.set_ticks(ticks[::tick_step])
     cbar.set_ticklabels(tick_labels[::tick_step])
     cbar.minorticks_off()
+
+  if right_adjust != 0:
+    plt.subplots_adjust(right = plt.rcParams["figure.subplot.right"] - right_adjust)
 
   return cbar
 
@@ -167,7 +116,7 @@ def plot(
   y,
   y_err = None,
   x_err = None,
-  line = True,
+  line = False,
   markers = True,
   errorbars = True,
   errorbands = False,
@@ -248,11 +197,12 @@ def colorscale(
       y_err[i],
       x_err[i],
       color = color,
+      zorder = 1,
       **kwargs
     )
 
   # draw colorbar, setting axis label and tick labels
-  if cbar:
+  if cbar and len(y) > 1:
     colorbar(
       sm,
       label = clabel,
@@ -262,6 +212,15 @@ def colorscale(
 
   # return the ScalarMappable that defines the colorbar, in case drawing colorbar elsewhere
   return cmap, sm
+
+# ==================================================================================================
+
+def autoscale(margin = 0.25):
+  y_low, y_high = plt.ylim()
+  y_max = max(max(line.get_ydata()) for line in plt.gca().get_lines())
+  y_min = min(min(line.get_ydata()) for line in plt.gca().get_lines())
+  y_range = y_max - y_min
+  plt.ylim(max(y_low, y_min - margin * y_range), min(y_high, y_max + margin * y_range))
 
 # ==================================================================================================
   
@@ -334,7 +293,7 @@ def make_unique_legend(extend_x = 0, **kwargs):
 
 # ==================================================================================================
 
-def label_and_save(x_label, y_label, output, **legend_kwargs):
+def label_and_save(x_label, y_label, output, clear = True, **legend_kwargs):
   """Shortcut for labeling axes, adding legend, saving the figure, and clearing the figure."""
   xlabel(x_label)
   ylabel(y_label)
@@ -343,7 +302,8 @@ def label_and_save(x_label, y_label, output, **legend_kwargs):
     output.savefig()
   else:
     plt.savefig(output)
-  plt.clf()
+  if clear:
+    plt.clf()
 
 # ==================================================================================================
 
@@ -360,10 +320,10 @@ def label_and_save(x_label, y_label, output, **legend_kwargs):
 #     units = "" if self.units is None else (rf"\;\text{{{self.units}}}" if align else f" {self.units}")
 #     return rf"{m}{self.sym}{m} {amp}= {self.val:.{places}f}{err}{units}"
 
-def databox(*entries, left = True, top = True, **kwargs):
+def databox(*entries, left = True, top = True, fontsize = 14, **kwargs):
   plt.text(
-    0.03 if left else 0.97,
-    0.96 if top else 0.04,
+    0.04 if left else 0.96,
+    0.95 if top else 0.05,
     "\n".join(entries),
     ha = "left" if left else "right",
     va = "top" if top else "bottom",
@@ -374,6 +334,7 @@ def databox(*entries, left = True, top = True, **kwargs):
       "edgecolor": plt.rcParams["legend.edgecolor"],
       "boxstyle": "round"
     },
+    fontsize = fontsize,
     **kwargs
   )
 
@@ -407,7 +368,9 @@ def vertical_spread(width, x = 0, color = "k", **kwargs):
 
 def make_pdf(path):
   """Create and return PDF at given path."""
-  os.makedirs(os.path.dirname(path), exist_ok = True)
+  dir_name = os.path.dirname(path)
+  if len(dir_name) > 0:
+    os.makedirs(os.path.dirname(path), exist_ok = True)
   return PdfPages(path)
 
 # ==================================================================================================
@@ -512,7 +475,7 @@ def plot_color_series(
 
 # ==================================================================================================
     
-def plot_cov(cov, labels = None, remove_nan = True, cmap = "coolwarm", fontsize = 5):
+def plot_cov(cov, labels = None, remove_nan = True, cmap = "coolwarm", fontsize = 5, is_corr = False):
 
   errors = np.sqrt(np.diag(cov))
   if remove_nan:
@@ -520,9 +483,13 @@ def plot_cov(cov, labels = None, remove_nan = True, cmap = "coolwarm", fontsize 
   else:
     mask = np.ones(len(errors), dtype = bool)
 
-  corr = cov[mask, :][:, mask] / np.outer(errors[mask], errors[mask])
+  if not is_corr:
+    corr = cov[mask, :][:, mask] / np.outer(errors[mask], errors[mask])
+  else:
+    corr = cov[mask, :][:, mask]
 
   plt.imshow(corr, cmap = cmap, vmin = -1, vmax = 1)
+  plt.gca().set_aspect("equal")
   colorbar()
 
   if labels is not None:
