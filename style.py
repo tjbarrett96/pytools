@@ -25,12 +25,14 @@ def xlabel(label: str, offset: float = 0, va: str = "bottom", **kwargs) -> None:
 
 # ==================================================================================================
 
-def ylabel(label: str, offset: float = 0, va: str = "top", **kwargs) -> None:
+def ylabel(label: str, offset: float = 0, va: str = None, twinned = False, **kwargs) -> None:
   """
   Override plt.ylabel with top-alignment.
   :param label: Label for y-axis.
   :param offset: Offset from top edge, as a fraction of the axes width.
   """
+  if va is None:
+    va = "top" if not twinned else "bottom"
   return plt.ylabel(label, ha = "right", va = va, y = 1 - offset, x = 0, **kwargs)
 
 # ==================================================================================================
@@ -278,7 +280,13 @@ def grid(
 def make_unique_legend(extend_x = 0, **kwargs):
   """Show a legend on the current plot, containing only unique labels without duplicates."""
   # Get the artist handles and text labels for everything in the current plot.
-  handles, labels = plt.gca().get_legend_handles_labels()
+  ax = plt.gca()
+  all_shared_axes = [ax, *ax.get_shared_x_axes().get_siblings(ax), *ax.get_shared_y_axes().get_siblings(ax)]
+  handles, labels = [], []
+  for sub_ax in all_shared_axes:
+    sub_handles, sub_labels = sub_ax.get_legend_handles_labels()
+    handles += sub_handles
+    labels += sub_labels
   # Make a dictionary mapping labels to handles; this ensures each label only appears with one handle.
   labels_to_handles = {}
   for label, handle in zip(labels, handles):
