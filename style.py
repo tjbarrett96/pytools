@@ -15,6 +15,16 @@ plt.style.use(f"{util.path}/gm2.mplstyle")
 
 # ==================================================================================================
 
+def stretched_figure(width = 1, height = 1):
+  fig_width, fig_height = plt.rcParams["figure.figsize"]
+  fig = plt.figure(figsize = (fig_width * width, fig_height * height))
+  left, right = fig.subplotpars.left, (1 - fig.subplotpars.right)
+  top, bottom = (1 - fig.subplotpars.top), fig.subplotpars.bottom
+  fig.subplots_adjust(left = left/width, right = (1 - right/width), bottom = bottom/height, top = (1 - top/height))
+  return fig
+
+# ==================================================================================================
+
 def xlabel(label: str, offset: float = 0, va: str = "bottom", **kwargs) -> None:
   """
   Override plt.xlabel with right-alignment.
@@ -55,19 +65,28 @@ def colorbar(
   ticks = None,
   tick_labels = None,
   axes = None,
-  pad = 0,
-  fraction = 0.07,
+  pad = 0.02,
+  fraction = 0.15,
   aspect = 18,
-  right_adjust = 0.05,
   **kwargs
 ):
   """Override plt.colorbar with automatic formatting."""
 
+  fig_width, fig_height = plt.gcf().get_size_inches()
+  default_fig_width, default_fig_height = plt.rcParams["figure.figsize"]
+  fig_width_scale = fig_width / default_fig_width
+
+  default_fig_left = plt.rcParams["figure.subplot.left"]
+  default_fig_right = plt.rcParams["figure.subplot.right"]
+  default_axes_width = default_fig_right - default_fig_left
+  axes_width = fig_width_scale * (plt.gcf().subplotpars.right - plt.gcf().subplotpars.left)
+  axes_width_scale = axes_width / default_axes_width
+
   cbar = plt.colorbar(
     mappable = mappable, 
     ax = axes if axes is not None else plt.gca(),
-    pad = pad,
-    fraction = fraction,
+    pad = pad / axes_width_scale,
+    fraction = fraction / axes_width_scale,
     aspect = aspect,
     **kwargs
   )
@@ -76,17 +95,18 @@ def colorbar(
     cbar.set_label(label, ha = "right", va = "bottom", y = 1, x = 0)
 
   if ticks is not None:
-    cbar.ax.tick_params(labelsize = 10)
-    tick_step = 1
-    max_ticks = 25
-    if len(ticks) > max_ticks:
-      tick_step = int(np.ceil(len(ticks) / max_ticks))
-    cbar.set_ticks(ticks[::tick_step])
-    cbar.set_ticklabels(tick_labels[::tick_step])
+    if isinstance(ticks, dict):
+      cbar.set_ticks(list(ticks.keys()))
+      cbar.set_ticklabels(list(ticks.values()))
+    else:
+      cbar.ax.tick_params(labelsize = 10)
+      tick_step = 1
+      max_ticks = 25
+      if len(ticks) > max_ticks:
+        tick_step = int(np.ceil(len(ticks) / max_ticks))
+      cbar.set_ticks(ticks[::tick_step])
+      cbar.set_ticklabels(tick_labels[::tick_step])
     cbar.minorticks_off()
-
-  if right_adjust != 0:
-    plt.subplots_adjust(right = plt.rcParams["figure.subplot.right"] - right_adjust)
 
   return cbar
 
@@ -208,7 +228,7 @@ def colorscale(
     colorbar(
       sm,
       label = clabel,
-      ticks = np.arange(len(y)),
+      ticks = np.arange(len(y)) if not isinstance(cticks, dict) else cticks,
       tick_labels = cticks if cticks is not None else np.arange(len(y))
     )
 
@@ -350,19 +370,51 @@ def databox(*entries, left = True, top = True, fontsize = 14, **kwargs):
 
 def colormesh(x, y, heights, label = None, cmap = "coolwarm", **kwargs):
   """Override plt.pcolormesh with automatic formatting and colorbar."""
-  result = plt.pcolormesh(x, y, heights.T, cmap = cmap, **kwargs)
-  cbar = colorbar(label)
+  result = plt.pcolormesh(x, y, heights.T, cmap = cmap, ec = 'face', lw = 0.5, **kwargs)
+  cbar = colorbar(label = label)
   return result, cbar
 
 # ==================================================================================================
+
+def y_data_to_frac(y):
+  ax = plt.gca()
+  trans = (ax.transData + ax.transAxes.inverted()).transform((0, y))
+  return trans[-1]
+
+def x_data_to_frac(x):
+  ax = plt.gca()
+  trans = (ax.transData + ax.transAxes.inverted()).transform((x, 0))
+  return trans[0]
 
 def draw_horizontal(y = 0, ls = ":", c = "k", **kwargs):
   """Draw horizontal line at given y-value."""
   return plt.axhline(y, linestyle = ls, color = c, **kwargs)
 
-def draw_vertical(x = 0, ls = ":", c = "k", **kwargs):
+def draw_vertical(x = 0, low = None, high = None, ls = ":", c = "k", label = None, pos = 0.5, rotate = 90, pad = 5, side = "right", **kwargs):
   """Draw vertical line at given x-value."""
-  return plt.axvline(x, linestyle = ls, color = c, **kwargs)
+  line = plt.axvline(
+    x,
+    ymin = y_data_to_frac(low) if low is not None else 0,
+    ymax = y_data_to_frac(high) if high is not None else 1,
+    linestyle = ls,
+    color = c,
+    **kwargs
+  )
+  if label is not None:
+    ylow, yhigh = line.get_ydata()
+    xsign = -1 if side == "left" else 1
+    ysign = -1 if side == "top" else 1
+    plt.annotate(
+      label,
+      (x, ylow + pos * (yhigh - ylow)),
+      (pad*xsign*np.cos((rotate - 90)*np.pi/180), pad*ysign*np.sin((rotate - 90)*np.pi/180)),
+      textcoords="offset pixels",
+      xycoords=plt.gca().get_xaxis_transform(),
+      rotation=rotate,
+      va=("top" if side == "bottom" else "bottom" if side == "top" else "center"),
+      ha=("left" if side == "right" else "right" if side == "left" else "center")
+    )
+  return line
 
 def horizontal_spread(width, y = 0, color = "k", **kwargs):
   """Draw horizontal band across the range (y - width, y + width)."""
