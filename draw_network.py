@@ -54,6 +54,7 @@ class Node:
     text: str | mpl_text.Text = "",
     shape: str = _default_node_opts["shape"],
     size: float = _default_node_opts["size"],
+    layer: "Layer" = None,
     **kwargs
   ):
 
@@ -63,6 +64,10 @@ class Node:
     if size < 0:
       raise ValueError(f"Node radius must be >= 0.")
     
+    # reference to parent layer and network
+    self.layer = layer
+    self.network = layer.network
+
     # position and radius
     self.x = xy[0]
     self.y = xy[1]
@@ -77,7 +82,7 @@ class Node:
 
     # create shape patch object with default options, forwarding any extra keywords
     kwargs = {**_default_patch_opts, **kwargs}
-    self.patch = _create_patch[shape](self.x, self.y, self.size, **kwargs)
+    self.patch: mpl_patch.Patch = _create_patch[shape](self.x, self.y, self.size, **kwargs)
 
     # create label text object
     if isinstance(text, mpl_text.Text):
@@ -98,19 +103,33 @@ class Node:
     self.annotations.append(mpl_text.Text(*self.relpos(*relpos), text, **kwargs))
 
   """Make a Connection from this node to another."""
-  def connect(self, other, **kwargs):
+  def connect(self, other: "Node", **kwargs):
     return Connection(self, other, **kwargs)
 
   """Add this node to the given or current axes."""
   def draw(self, ax: mpl_axes.Axes = None):
     if ax is None:
       ax = plt.gca()
-    # ax.text(-5, self.y, "testttt", **_default_text_opts)
-    # ax.add_artist(mpl_text.Text(-5, self.y, "testttt", **_default_text_opts))
     ax.add_patch(self.patch)
     ax.add_artist(self.text)
     for annotation in self.annotations:
       ax.add_artist(annotation)
+
+  """Highlights all connections to this node."""
+  def highlight(self, enable: bool = True):
+    if self.network is None:
+      raise ValueError("Highlighted node is missing reference to parent network.")
+    for pair, connection in self.network.connections.items():
+      if self in pair and enable:
+        connection.highlight()
+      else:
+        connection.highlight(False)
+    return self
+
+  """Set the face color of the node."""
+  def color(self, color: str):
+    self.patch.set_facecolor(color)
+    return self
 
 # ------------------------------------------------------------------------------------------------
     
@@ -124,11 +143,15 @@ class Layer:
     size: float = 1,
     gap: float = 0.2,
     label_format: Callable[[int, int], str] = None,
+    network: "Network" = None,
     **kwargs
   ):
     
     if nodes < 0:
       raise ValueError(f"Number of nodes in a layer must be >= 0.")
+
+    # reference to parent network
+    self.network = network
 
     # position and spacing
     self.x = x
@@ -153,6 +176,7 @@ class Layer:
         (self.x, y_start - n * dy),
         label_format(n),
         size = self.size,
+        layer = self,
         **kwargs
       ))
 
@@ -168,7 +192,7 @@ class Layer:
     self.annotations.append(mpl_text.Text(*self.relpos(*relpos), text, **kwargs))
 
   """Make a mapping from (NodeA, NodeB) -> Connection from each node in this layer to another layer."""
-  def connect(self, other, **kwargs):
+  def connect(self, other: "Layer", **kwargs):
     result = {}
     for this_node in self.nodes:
       for other_node in other.nodes:
@@ -234,19 +258,26 @@ class Connection:
     ax.add_line(self.line)
     ax.add_artist(self.text)
 
+  """Set highlighted state on or off."""
+  def highlight(self, enable: bool = True):
+    if enable:
+      self.line.set_linewidth(1.5)
+      self.line.set_alpha(1)
+    else:
+      self.line.set_linewidth(1)
+      self.line.set_alpha(0.25)
+
 # ------------------------------------------------------------------------------------------------
 
 class Network:
-
-  # ------------------------------------------------------------------------------------------------
 
   def __init__(
     self,
     gap: float = 3
   ):
 
-    self.layers = []
-    self.connections = {}
+    self.layers: list[Layer] = []
+    self.connections: dict[tuple[Node, Node], Connection] = {}
 
     self.gap = gap
     if self.gap < 0:
@@ -259,10 +290,9 @@ class Network:
     x = len(self.layers) * self.gap
 
     prev_layer = self.layers[-1] if len(self.layers) > 0 else None
-    new_layer = Layer(x, *args, **kwargs)
+    new_layer = Layer(x, *args, **{**kwargs, "network": self})
 
     self.layers.append(new_layer)
-
     if connect and prev_layer is not None:
       self.connections.update(prev_layer.connect(new_layer))
 
@@ -298,38 +328,6 @@ class Network:
     ax.autoscale_view()
     ax.set_axis_off()
 
-  # ------------------------------------------------------------------------------------------------
-    
-  def color_node(self, layer, index, color, connections = True, highlight = True):
-
-    self.layers[layer].nodes[index].patch.set_facecolor(color)
-
-    if connections:
-      for key, connection in self.connections.items():
-        if (layer, index) in key:
-          connection.line.set_color(color)
-          connection.line.set_alpha(0.25)
-
-    if highlight:
-      self.highlight_connections(layer, index)
-
-  # ------------------------------------------------------------------------------------------------
-          
-  def highlight_connections(self, layer, index):
-    for key, connection in self.connections.items():
-      if (layer, index) in key:
-        connection.line.set_linewidth(1.5)
-        connection.line.set_alpha(1)
-      else:
-        connection.line.set_linewidth(1)
-        connection.line.set_alpha(0.25)
-
-  # ------------------------------------------------------------------------------------------------
-        
-  def label_node(self, text, layer, index, dy = 0):
-    node = self.layers[layer].nodes[index]
-    plt.annotate(text, (node.x, node.y + dy*node.r), fontsize = 10, va = "bottom", ha = "center")
-
 # ------------------------------------------------------------------------------------------------
     
 if __name__ == "__main__":
@@ -338,9 +336,17 @@ if __name__ == "__main__":
   ax = fig.add_subplot()
 
   network = Network(gap = 5)
-  network.add_layer(4, "x", shape = "square").annotate(r"$\mathbf{x}$", (-3, 0))
-  network.add_layer(10, "h")
-  network.add_layer(2, "y", shape = "square").annotate(r"$\mathbf{y}$", (+3, 0))
+
+  input = network.add_layer(4, "x", shape = "square")
+  input.annotate(r"$\mathbf{x}$", (-3, 0))
+
+  hidden = network.add_layer(10, "h")
+
+  output = network.add_layer(2, "y", shape = "square")
+  output.annotate(r"$\mathbf{y}$", (+3, 0))
+
+  hidden.nodes[3].color("C0").highlight()
+
   network.draw(ax)
 
   plt.show()
