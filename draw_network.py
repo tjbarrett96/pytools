@@ -137,7 +137,7 @@ class Layer:
 
   def __init__(
     self,
-    x: float,
+    xy: tuple[float, float],
     nodes: int,
     symbol: str = "",
     size: float = 1,
@@ -153,15 +153,17 @@ class Layer:
     # reference to parent network
     self.network = network
 
-    # position and spacing
-    self.x = x
-    self.y = 0
-    self.gap = gap
+    # centroid of layer
+    self.x = xy[0]
+    self.y = xy[1]
+
+    # size of nodes and gap between them (as fraction of size)
     self.size = size
+    self.gap = gap
 
     dy = self.size + self.gap * self.size
     self.height = nodes * self.size + (nodes - 1) * (self.gap * self.size)
-    y_start = self.height / 2 - self.size/2
+    y_start = self.y + self.height / 2 - self.size/2
 
     # label format function
     if label_format is None:
@@ -273,24 +275,32 @@ class Network:
 
   def __init__(
     self,
+    xy: tuple[float, float] = None,
     gap: float = 3
   ):
+    
+    # centroid of first layer
+    if xy is None:
+      xy = (0, 0)
+    self.x = xy[0]
+    self.y = xy[1]
 
-    self.layers: list[Layer] = []
-    self.connections: dict[tuple[Node, Node], Connection] = {}
-
+    # gap between layers
     self.gap = gap
     if self.gap < 0:
       raise ValueError(f"Network layer gap size must be >= 0.")
+    
+    self.layers: list[Layer] = []
+    self.connections: dict[tuple[Node, Node], Connection] = {}
   
   # ------------------------------------------------------------------------------------------------
 
   def add_layer(self, *args, connect = True, **kwargs):
-    
-    x = len(self.layers) * self.gap
 
     prev_layer = self.layers[-1] if len(self.layers) > 0 else None
-    new_layer = Layer(x, *args, **{**kwargs, "network": self})
+
+    new_x = self.x + len(self.layers) * self.gap
+    new_layer = Layer((new_x, self.y), *args, network = self, **kwargs)
 
     self.layers.append(new_layer)
     if connect and prev_layer is not None:
@@ -335,18 +345,22 @@ if __name__ == "__main__":
   fig = plt.figure()
   ax = fig.add_subplot()
 
-  network = Network(gap = 5)
-
+  network = Network((0, 0), gap = 5)
   input = network.add_layer(4, "x", shape = "square")
-  input.annotate(r"$\mathbf{x}$", (-3, 0))
-
+  input.annotate(r"$\mathbf{x}_0$", (-3, 0))
   hidden = network.add_layer(10, "h")
-
   output = network.add_layer(2, "y", shape = "square")
-  output.annotate(r"$\mathbf{y}$", (+3, 0))
-
+  output.annotate(r"$\mathbf{y}_0$", (+3, 0))
   hidden.nodes[3].color("C0").highlight()
-
   network.draw(ax)
+
+  network2 = Network((0, -10), gap = 5)
+  input2 = network2.add_layer(3, "x", shape = "square")
+  input2.annotate(r"$\mathbf{x}_1$", (-3, 0))
+  hidden2 = network2.add_layer(5, "h")
+  output2 = network2.add_layer(2, "y", shape = "square")
+  output2.annotate(r"$\mathbf{y}_1$", (+3, 0))
+  hidden2.nodes[1].color("C1").highlight()
+  network2.draw(ax)
 
   plt.show()
