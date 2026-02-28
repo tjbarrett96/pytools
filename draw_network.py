@@ -29,7 +29,8 @@ _default_text_opts = {
   "color": "black",
   "ha": "center",
   "va": "center",
-  "clip_on": False
+  "clip_on": False,
+  "usetex": True
 }
 
 # ------------------------------------------------------------------------------------------------
@@ -94,11 +95,7 @@ class Node:
   """Add text annotation at the given relative position from node center."""
   def annotate(self, text: str, relpos: tuple[float, float], **kwargs):
     kwargs = {**_default_text_opts, **kwargs}
-    self.annotations.append(mpl_text.Text(
-      *self.relpos(*relpos),
-      text,
-      **kwargs
-    ))
+    self.annotations.append(mpl_text.Text(*self.relpos(*relpos), text, **kwargs))
 
   """Make a Connection from this node to another."""
   def connect(self, other, **kwargs):
@@ -126,8 +123,6 @@ class Layer:
     symbol: str = "",
     size: float = 1,
     gap: float = 0.2,
-    name: str = "",
-    name_relpos: tuple[float, float] = None,
     label_format: Callable[[int, int], str] = None,
     **kwargs
   ):
@@ -142,8 +137,8 @@ class Layer:
     self.size = size
 
     dy = self.size + self.gap * self.size
-    y_length = nodes * self.size + (nodes - 1) * (self.gap * self.size)
-    y_start = y_length / 2
+    self.height = nodes * self.size + (nodes - 1) * (self.gap * self.size)
+    y_start = self.height / 2 - self.size/2
 
     # label format function
     if label_format is None:
@@ -161,9 +156,16 @@ class Layer:
         **kwargs
       ))
 
-  """Returns 2D coordinate shifted from layer center by (dx, dy) in units of the node radius."""
+    self.annotations: list[mpl_text.Text] = []
+
+  """Returns 2D coordinate shifted from layer center by (dx, dy) in units of the layer width/height."""
   def relpos(self, dx: float, dy: float) -> np.ndarray:
-    return np.array([self.x + dx * self.size/2, self.y + dy * self.size/2])
+    return np.array([self.x + dx * self.size/2, self.y + dy * self.height/2])
+
+  """Add text annotation at the given relative position from node center."""
+  def annotate(self, text: str, relpos: tuple[float, float], **kwargs):
+    kwargs = {**_default_text_opts, **kwargs}
+    self.annotations.append(mpl_text.Text(*self.relpos(*relpos), text, **kwargs))
 
   """Make a mapping from (NodeA, NodeB) -> Connection from each node in this layer to another layer."""
   def connect(self, other, **kwargs):
@@ -177,6 +179,8 @@ class Layer:
   def draw(self, ax: mpl_axes.Axes = None):
     for node in self.nodes:
       node.draw(ax)
+    for annotation in self.annotations:
+      ax.add_artist(annotation)
 
 # ------------------------------------------------------------------------------------------------
       
@@ -262,6 +266,8 @@ class Network:
     if connect and prev_layer is not None:
       self.connections.update(prev_layer.connect(new_layer))
 
+    return new_layer
+
   # ------------------------------------------------------------------------------------------------
 
   def draw(self, ax: mpl_axes.Axes = None):
@@ -332,11 +338,9 @@ if __name__ == "__main__":
   ax = fig.add_subplot()
 
   network = Network(gap = 5)
-  network.add_layer(6, "x", shape = "square")
-  network.layers[0].nodes[0].annotate("test", (-5, 0), ha = "right")
+  network.add_layer(4, "x", shape = "square").annotate(r"$\mathbf{x}$", (-3, 0))
   network.add_layer(10, "h")
-  network.layers[1].nodes[0].annotate("test", (0, 3), va = "bottom")
-  network.add_layer(2, "y", shape = "square")
+  network.add_layer(2, "y", shape = "square").annotate(r"$\mathbf{y}$", (+3, 0))
   network.draw(ax)
 
   plt.show()
