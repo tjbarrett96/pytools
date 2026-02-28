@@ -1,5 +1,7 @@
 import numpy as np
+import io
 
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpl_patch
 import matplotlib.lines as mpl_line
@@ -26,7 +28,8 @@ _default_line_opts = {
 _default_text_opts = {
   "color": "black",
   "ha": "center",
-  "va": "center"
+  "va": "center",
+  "clip_on": False
 }
 
 # ------------------------------------------------------------------------------------------------
@@ -47,11 +50,10 @@ class Node:
   def __init__(
     self,
     xy: tuple[float, float],
-    label: str = "",
+    text: str | mpl_text.Text = "",
     shape: str = _default_node_opts["shape"],
     size: float = _default_node_opts["size"],
-    patch_kwargs: dict[str, Any] = None,
-    text_kwargs: dict[str, Any] = None
+    **kwargs
   ):
 
     if shape not in _create_patch:
@@ -72,22 +74,32 @@ class Node:
     self.bottom = self.relpos(0, -1)
     self.top = self.relpos(0, 1)
 
-    # create shape patch object
-    if patch_kwargs is None:
-      patch_kwargs = {}
-    patch_kwargs = {**_default_patch_opts, **patch_kwargs}
-    self.patch = _create_patch[shape](self.x, self.y, self.size, **patch_kwargs)
+    # create shape patch object with default options, forwarding any extra keywords
+    kwargs = {**_default_patch_opts, **kwargs}
+    self.patch = _create_patch[shape](self.x, self.y, self.size, **kwargs)
 
     # create label text object
-    if text_kwargs is None:
-      text_kwargs = {}
-    text_kwargs = {**_default_text_opts, **text_kwargs}
-    self.label = mpl_text.Text(self.x, self.y, label, **text_kwargs)
+    if isinstance(text, mpl_text.Text):
+      self.text = text
+    else:
+      self.text = mpl_text.Text(self.x, self.y, text, **_default_text_opts)
 
-  """Returns 2D coordinate shifted from center by (dx, dy) in units of the radius."""
+    # additional text annotations other than the central label
+    self.annotations: list[mpl_text.Text] = []
+
+  """Returns 2D coordinate shifted from node center by (dx, dy) in units of the node radius."""
   def relpos(self, dx: float, dy: float) -> np.ndarray:
     return np.array([self.x + dx * self.size/2, self.y + dy * self.size/2])
   
+  """Add text annotation at the given relative position from node center."""
+  def annotate(self, text: str, relpos: tuple[float, float], **kwargs):
+    kwargs = {**_default_text_opts, **kwargs}
+    self.annotations.append(mpl_text.Text(
+      *self.relpos(*relpos),
+      text,
+      **kwargs
+    ))
+
   """Make a Connection from this node to another."""
   def connect(self, other, **kwargs):
     return Connection(self, other, **kwargs)
@@ -96,8 +108,12 @@ class Node:
   def draw(self, ax: mpl_axes.Axes = None):
     if ax is None:
       ax = plt.gca()
+    # ax.text(-5, self.y, "testttt", **_default_text_opts)
+    # ax.add_artist(mpl_text.Text(-5, self.y, "testttt", **_default_text_opts))
     ax.add_patch(self.patch)
-    ax.add_artist(self.label)
+    ax.add_artist(self.text)
+    for annotation in self.annotations:
+      ax.add_artist(annotation)
 
 # ------------------------------------------------------------------------------------------------
     
@@ -108,7 +124,10 @@ class Layer:
     x: float,
     nodes: int,
     symbol: str = "",
+    size: float = 1,
     gap: float = 0.2,
+    name: str = "",
+    name_relpos: tuple[float, float] = None,
     label_format: Callable[[int, int], str] = None,
     **kwargs
   ):
@@ -118,7 +137,13 @@ class Layer:
 
     # position and spacing
     self.x = x
+    self.y = 0
     self.gap = gap
+    self.size = size
+
+    dy = self.size + self.gap * self.size
+    y_length = nodes * self.size + (nodes - 1) * (self.gap * self.size)
+    y_start = y_length / 2
 
     # label format function
     if label_format is None:
@@ -127,18 +152,18 @@ class Layer:
       else:
         label_format = lambda node: ""
 
-    size = kwargs.get("radius", _default_node_opts["size"])
-    dy = size + self.gap * size
-    y_length = nodes * size + (nodes - 1) * (self.gap * size)
-    y_start = y_length / 2
-
     self.nodes: list[Node] = []
     for n in range(nodes):
       self.nodes.append(Node(
         (self.x, y_start - n * dy),
         label_format(n),
+        size = self.size,
         **kwargs
       ))
+
+  """Returns 2D coordinate shifted from layer center by (dx, dy) in units of the node radius."""
+  def relpos(self, dx: float, dy: float) -> np.ndarray:
+    return np.array([self.x + dx * self.size/2, self.y + dy * self.size/2])
 
   """Make a mapping from (NodeA, NodeB) -> Connection from each node in this layer to another layer."""
   def connect(self, other, **kwargs):
@@ -249,7 +274,21 @@ class Network:
     for connection in self.connections.values():
       connection.draw(ax)
 
+    # to get accurate artist bboxes below, must set aspect ratio & autoscale, then draw.
+    # without autoscaling here, the first two text artists encountered in the iterable
+    # always seem to have an incorrect, almost point-like bbox (??).
     ax.set_aspect("equal")
+    ax.autoscale_view()
+    ax.figure.draw_without_rendering()
+
+    # update data limits to account for any text annotations
+    artists = [artist for artist in ax.get_children()]
+    for artist in artists:
+      if not isinstance(artist, mpl_text.Text) or not artist.get_text():
+        continue
+      bbox = artist.get_window_extent().transformed(ax.transData.inverted())
+      ax.update_datalim(bbox.corners())
+
     ax.autoscale_view()
     ax.set_axis_off()
 
@@ -293,17 +332,11 @@ if __name__ == "__main__":
   ax = fig.add_subplot()
 
   network = Network(gap = 5)
-  network.add_layer(3, "x", shape = "square")
+  network.add_layer(6, "x", shape = "square")
+  network.layers[0].nodes[0].annotate("test", (-5, 0), ha = "right")
   network.add_layer(10, "h")
+  network.layers[1].nodes[0].annotate("test", (0, 3), va = "bottom")
   network.add_layer(2, "y", shape = "square")
   network.draw(ax)
-
-  # node = Node((0, 0), "x")
-  # node.draw(ax)
-
-  # ax.set_aspect("equal")
-  # # ax.autoscale_view()
-  # plt.xlim(-1.5, 1.5)
-  # plt.ylim(-1.5, 1.5)
 
   plt.show()
