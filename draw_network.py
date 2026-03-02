@@ -10,6 +10,9 @@ import matplotlib.axes as mpl_axes
 
 from typing import Any, Callable
 
+# TODO: add unit option to relpos, defaults to internal size/width, switch for absolute
+# TODO: add gap variables to npad, lpad to distinguish node/layer sep
+
 # ------------------------------------------------------------------------------------------------
 
 _default_patch_opts = {
@@ -45,6 +48,30 @@ _default_node_opts = {
   "shape": "circle",
   "size": 1
 }
+
+# ------------------------------------------------------------------------------------------------
+
+"""Sets viewing range for given or current axes to include all artists."""
+def autoscale(ax: mpl_axes.Axes = None):
+  
+  if ax is None:
+    ax = plt.gca()
+
+  ax.set_aspect("equal")
+  ax.autoscale_view()
+  ax.figure.draw_without_rendering()
+
+  # update data limits to account for any text annotations
+  artists = [artist for artist in ax.get_children()]
+  for artist in artists:
+    if not isinstance(artist, mpl_text.Text) or not artist.get_text():
+      continue
+    bbox = artist.get_window_extent().transformed(ax.transData.inverted())
+    ax.update_datalim(bbox.corners())
+
+  ax.autoscale_view()
+
+# ------------------------------------------------------------------------------------------------
 
 class Node:
 
@@ -94,8 +121,11 @@ class Node:
     self.annotations: list[mpl_text.Text] = []
 
   """Returns 2D coordinate shifted from node center by (dx, dy) in units of the node radius."""
-  def relpos(self, dx: float, dy: float) -> np.ndarray:
-    return np.array([self.x + dx * self.size/2, self.y + dy * self.size/2])
+  def relpos(self, dx: float, dy: float, abs: bool = False) -> np.ndarray:
+    if abs:
+      return np.array([self.x + dx, self.y + dy])
+    else:
+      return np.array([self.x + dx * self.size/2, self.y + dy * self.size/2])
   
   """Add text annotation at the given relative position from node center."""
   def annotate(self, text: str, relpos: tuple[float, float], **kwargs):
@@ -130,7 +160,7 @@ class Node:
   def color(self, color: str):
     self.patch.set_facecolor(color)
     return self
-
+  
 # ------------------------------------------------------------------------------------------------
     
 class Layer:
@@ -140,9 +170,10 @@ class Layer:
     xy: tuple[float, float],
     nodes: int,
     symbol: str = "",
-    size: float = 1,
-    gap: float = 0.2,
-    label_format: Callable[[int, int], str] = None,
+    size: float = _default_node_opts["size"],
+    shape: str = _default_node_opts["shape"],
+    nstep: float = None,
+    label_format: Callable[[int], str] = None,
     network: "Network" = None,
     **kwargs
   ):
@@ -159,11 +190,14 @@ class Layer:
 
     # size of nodes and gap between them (as fraction of size)
     self.size = size
-    self.gap = gap
+    self.shape = shape
 
-    dy = self.size + self.gap * self.size
-    self.height = nodes * self.size + (nodes - 1) * (self.gap * self.size)
-    y_start = self.y + self.height / 2 - self.size/2
+    if nstep is None:
+      nstep = 1.2 * self.size
+    self.nstep = nstep
+
+    self.height = (nodes - 1) * self.nstep
+    y_start = self.y + self.height/2
 
     # label format function
     if label_format is None:
@@ -175,18 +209,26 @@ class Layer:
     self.nodes: list[Node] = []
     for n in range(nodes):
       self.nodes.append(Node(
-        (self.x, y_start - n * dy),
+        (self.x, y_start - n * self.nstep),
         label_format(n),
         size = self.size,
+        shape = self.shape,
         layer = self,
         **kwargs
       ))
 
+    # vertical position of first and last nodes
+    self.ymax = self.nodes[0].y
+    self.ymin = self.nodes[-1].y
+
     self.annotations: list[mpl_text.Text] = []
 
   """Returns 2D coordinate shifted from layer center by (dx, dy) in units of the layer width/height."""
-  def relpos(self, dx: float, dy: float) -> np.ndarray:
-    return np.array([self.x + dx * self.size/2, self.y + dy * self.height/2])
+  def relpos(self, dx: float, dy: float, abs: bool = False) -> np.ndarray:
+    if abs:
+      return np.array([self.x + dx, self.y + dy])
+    else:
+      return np.array([self.x + dx * self.size/2, self.y + dy * self.height/2])
 
   """Add text annotation at the given relative position from node center."""
   def annotate(self, text: str, relpos: tuple[float, float], **kwargs):
@@ -276,7 +318,8 @@ class Network:
   def __init__(
     self,
     xy: tuple[float, float] = None,
-    gap: float = 3
+    lstep: float = 3,
+    **kwargs
   ):
     
     # centroid of first layer
@@ -286,27 +329,48 @@ class Network:
     self.y = xy[1]
 
     # gap between layers
-    self.gap = gap
-    if self.gap < 0:
+    self.lstep = lstep
+    if self.lstep < 0:
       raise ValueError(f"Network layer gap size must be >= 0.")
+    
+    # extra options passed to layers
+    self.options = kwargs
     
     self.layers: list[Layer] = []
     self.connections: dict[tuple[Node, Node], Connection] = {}
+
+    # minimum and maximum extent of all layers
+    self.xmin, self.xmax = None, None
+    self.ymin, self.ymax = None, None
   
   # ------------------------------------------------------------------------------------------------
 
-  def add_layer(self, *args, connect = True, **kwargs):
+  def add_layer(self, *args, lstep: float = None, connect: bool = True, **kwargs):
 
     prev_layer = self.layers[-1] if len(self.layers) > 0 else None
+    prev_x = prev_layer.x if prev_layer is not None else self.x
 
-    new_x = self.x + len(self.layers) * self.gap
+    if lstep is None:
+      lstep = self.lstep
+
+    new_x = prev_x + lstep
+    kwargs = {**self.options, **kwargs}
     new_layer = Layer((new_x, self.y), *args, network = self, **kwargs)
 
     self.layers.append(new_layer)
     if connect and prev_layer is not None:
       self.connections.update(prev_layer.connect(new_layer))
 
-    return new_layer
+    if self.xmin is None or new_x < self.xmin:
+      self.xmin = new_x
+    if self.xmax is None or new_x > self.xmax:
+      self.xmax = new_x
+    if self.ymin is None or new_layer.ymin < self.ymin:
+      self.ymin = new_layer.ymin
+    if self.ymax is None or new_layer.ymax > self.ymax:
+      self.ymax = new_layer.ymax
+
+    return self
 
   # ------------------------------------------------------------------------------------------------
 
@@ -320,47 +384,154 @@ class Network:
     for connection in self.connections.values():
       connection.draw(ax)
 
-    # to get accurate artist bboxes below, must set aspect ratio & autoscale, then draw.
-    # without autoscaling here, the first two text artists encountered in the iterable
-    # always seem to have an incorrect, almost point-like bbox (??).
-    ax.set_aspect("equal")
-    ax.autoscale_view()
-    ax.figure.draw_without_rendering()
-
-    # update data limits to account for any text annotations
-    artists = [artist for artist in ax.get_children()]
-    for artist in artists:
-      if not isinstance(artist, mpl_text.Text) or not artist.get_text():
-        continue
-      bbox = artist.get_window_extent().transformed(ax.transData.inverted())
-      ax.update_datalim(bbox.corners())
-
-    ax.autoscale_view()
+    autoscale(ax)
     ax.set_axis_off()
 
 # ------------------------------------------------------------------------------------------------
-    
+
+# TODO: Attention could be subclass of Network? would require some updates/generalization of Network, e.g. draw bounding patch, relpos for labels, etc.
+# TODO: tell each network an input vector label, so attention can fetch it
+# TODO: make each thing subclass a common Region(?) class, with indiviudal (x,y), width/height, and relpos method, can update as network grows
+class Attention:
+
+  def __init__(
+    self,
+    multinetwork: "MultiNetwork" = None,
+    width: float = 3,
+    pad: float = None
+  ):
+
+    self.multinetwork = multinetwork
+    self.width = width
+
+    lower_left_node = self.multinetwork.networks[-1].layers[-1].nodes[-1]
+    upper_left_node = self.multinetwork.networks[0].layers[-1].nodes[0]
+
+    self.xmin, self.ymin = lower_left_node.relpos(1, -1)
+    _, self.ymax = upper_left_node.relpos(1, 1)
+    self.xmax = self.xmin + self.width
+
+    if pad is None:
+      pad = upper_left_node.size
+    self.ymin -= pad
+    self.ymax += pad
+    self.height = self.ymax - self.ymin
+
+    patch_args = {**_default_patch_opts, "color": "lightgray"}
+    self.patch = mpl_patch.Rectangle(
+      (self.xmin, self.ymin),
+      self.width,
+      self.height,
+      zorder = 0,
+      **patch_args
+    )
+
+    self.inputs = Layer(
+      (self.xmin + pad, (self.ymin + self.ymax)/2),
+      len(self.multinetwork.networks),
+      nstep = self.multinetwork.netstep,
+      shape = "square",
+      label_format = lambda n: fr"$\mathbf{{x}}_{{{n}}}$",
+      alpha = 0,
+      lw = 0
+    )
+
+    self.outputs = Layer(
+      (self.xmax - pad, (self.ymin + self.ymax)/2),
+      len(self.multinetwork.networks),
+      nstep = self.multinetwork.netstep,
+      shape = "square",
+      label_format = lambda n: fr"$\mathbf{{x}}_{{{n}}}$",
+      alpha = 0,
+      lw = 0
+    )
+
+    self.connections = self.inputs.connect(self.outputs)
+
+    # self.inputs: list[Node] = []
+    # self.outputs = list[Node] = []
+    # for network in self.multinetwork.networks:
+
+  def draw(self, ax: mpl_axes.Axes = None):
+    if ax is None:
+      ax = plt.gca()
+    ax.add_patch(self.patch)
+    self.inputs.draw(ax)
+    self.outputs.draw(ax)
+    for connection in self.connections.values():
+      connection.draw(ax)
+
+# ------------------------------------------------------------------------------------------------
+
+class MultiNetwork:
+
+  def __init__(
+    self,
+    networks: int,
+    netstep: float = 3,
+    **kwargs
+  ):
+    self.netstep = netstep
+    self.networks = [Network((0, -i*netstep), **kwargs) for i in range(networks)]
+    self.attentions: list[Attention] = []
+
+  def add_layer(self, *args, **kwargs):
+    for network in self.networks:
+      network.add_layer(*args, **kwargs)
+
+  def add_attention(self):
+
+    input_len = len(self.networks[0].layers[0].nodes)
+    input_shape = self.networks[0].layers[0].shape
+    input_size = self.networks[0].layers[0].size
+
+    self.add_layer(input_len, shape = input_shape, size = input_size)
+    attention = Attention(self)
+    self.attentions.append(attention)
+    self.add_layer(input_len, lstep = attention.width + input_size, connect = False, shape = input_shape, size = input_size)
+
+  def draw(self, ax: mpl_axes.Axes = None):
+    if ax is None:
+      ax = plt.gca()
+    for network in self.networks:
+      network.draw(ax)
+    for attention in self.attentions:
+      attention.draw(ax)
+
+# ------------------------------------------------------------------------------------------------
+
 if __name__ == "__main__":
 
   fig = plt.figure()
   ax = fig.add_subplot()
 
-  network = Network((0, 0), gap = 5)
-  input = network.add_layer(4, "x", shape = "square")
-  input.annotate(r"$\mathbf{x}_0$", (-3, 0))
-  hidden = network.add_layer(10, "h")
-  output = network.add_layer(2, "y", shape = "square")
-  output.annotate(r"$\mathbf{y}_0$", (+3, 0))
-  hidden.nodes[3].color("C0").highlight()
-  network.draw(ax)
+  # network = Network((0, 0), gap = 5)
+  # network.add_layer(4, "x", shape = "square")
+  # network.add_layer(10, "h")
+  # network.add_layer(2, "y", shape = "square")
+  # network.layers[0].annotate(r"$\mathbf{x}_0$", (-3, 0))
+  # network.layers[-1].annotate(r"$\mathbf{y}_0$", (+3, 0))
+  # network.layers[1].nodes[3].color("C0").highlight()
+  # network.draw(ax)
 
-  network2 = Network((0, -10), gap = 5)
-  input2 = network2.add_layer(3, "x", shape = "square")
-  input2.annotate(r"$\mathbf{x}_1$", (-3, 0))
-  hidden2 = network2.add_layer(5, "h")
-  output2 = network2.add_layer(2, "y", shape = "square")
-  output2.annotate(r"$\mathbf{y}_1$", (+3, 0))
-  hidden2.nodes[1].color("C1").highlight()
-  network2.draw(ax)
+  # network2 = Network((0, -10), gap = 5, size = 0.6)
+  # network2.add_layer(3, shape = "square")
+  # network2.add_layer(5)
+  # network2.add_layer(2, shape = "square")
+  # network2.layers[0].annotate(r"$\mathbf{x}_1$", (-5, 0))
+  # network2.layers[-1].annotate(r"$\mathbf{y}_1$", (+5, 0))
+  # network2.layers[1].nodes[1].color("C1").highlight()
+  # network2.draw(ax)
+
+  network = MultiNetwork(4, netstep = 4, size = 0.5, nstep = 0.5)
+  network.add_layer(3, shape = "square")
+  network.add_attention()
+  network.add_layer(5)
+  network.add_attention()
+  network.add_layer(5)
+  network.add_attention()
+  network.add_layer(5)
+  network.add_layer(2, shape = "square")
+  network.draw(ax)
 
   plt.show()
