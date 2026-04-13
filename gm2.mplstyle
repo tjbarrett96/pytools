@@ -65,6 +65,7 @@ savefig.dpi : 300
 #legend.fontsize: 14
 #axes.titlesize: 16
 axes.formatter.limits: -2, 4
+axes.formatter.offset_threshold: 3
 #lines.markersize: 6
 axes.formatter.use_mathtext: True
 #legend.borderaxespad: 1
