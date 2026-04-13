@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import matplotlib as mpl
+import matplotlib.text as mpl_text
 from matplotlib.backends.backend_pdf import PdfPages
 import numpy as np
 import os
@@ -10,8 +11,12 @@ import pytools.util as util
 # ==================================================================================================
 
 # mpl.use("Cairo")
-plt.style.use(f"{util.path}/gm2.mplstyle")
-#plt.style.use(f"{util.path}/custom.mplstyle")
+#plt.style.use(f"{util.path}/gm2.mplstyle")
+plt.style.use(f"{util.path}/custom_gm2.mplstyle")
+# plt.style.use(f"{util.path}/custom.mplstyle")
+
+def default():
+  plt.style.use("default")
 
 # ==================================================================================================
 
@@ -59,6 +64,11 @@ def twinx(shrink = None):
 
 # ==================================================================================================
 
+def clabel(cbar, label):
+  cbar.set_label(label, ha = "right", va = "bottom", y = 1, x = 0)
+
+# ==================================================================================================
+
 def colorbar(
   mappable = None,
   label = None,
@@ -81,6 +91,7 @@ def colorbar(
   default_axes_width = default_fig_right - default_fig_left
   axes_width = fig_width_scale * (plt.gcf().subplotpars.right - plt.gcf().subplotpars.left)
   axes_width_scale = axes_width / default_axes_width
+  print("colorbar scale:", axes_width_scale)
 
   cbar = plt.colorbar(
     mappable = mappable, 
@@ -237,12 +248,36 @@ def colorscale(
 
 # ==================================================================================================
 
-def autoscale(margin = 0.25):
-  y_low, y_high = plt.ylim()
-  y_max = max(max(line.get_ydata()) for line in plt.gca().get_lines())
-  y_min = min(min(line.get_ydata()) for line in plt.gca().get_lines())
-  y_range = y_max - y_min
-  plt.ylim(max(y_low, y_min - margin * y_range), min(y_high, y_max + margin * y_range))
+# def autoscale(margin = 0.25):
+#   y_low, y_high = plt.ylim()
+#   y_max = max(max(line.get_ydata()) for line in plt.gca().get_lines())
+#   y_min = min(min(line.get_ydata()) for line in plt.gca().get_lines())
+#   y_range = y_max - y_min
+#   plt.ylim(max(y_low, y_min - margin * y_range), min(y_high, y_max + margin * y_range))
+
+def autoscale(ax = None, margin: float = 0.1, aspect: str = None):
+    
+  if ax is None:
+    ax = plt.gca()
+  
+  # to get accurate artist bboxes below, must set aspect ratio & autoscale, then draw.
+  # without autoscaling here, the first two text artists encountered in the iterable
+  # always seem to have an incorrect, almost point-like bbox (??).
+  if aspect:
+    ax.set_aspect(aspect)
+  ax.autoscale_view()
+  ax.figure.draw_without_rendering()
+
+  # update data limits to account for any text annotations
+  artists = [artist for artist in ax.get_children()]
+  for artist in artists:
+    if not isinstance(artist, mpl_text.Text) or not artist.get_text():
+      continue
+    bbox = artist.get_window_extent().transformed(ax.transData.inverted())
+    ax.update_datalim(bbox.corners())
+
+  ax.margins(margin)
+  ax.autoscale_view()
 
 # ==================================================================================================
   
@@ -434,6 +469,11 @@ def make_pdf(path):
   return PdfPages(path)
 
 # ==================================================================================================
+
+def make_continuous_color_scale(cmap, vmin = 0, vmax = 1):
+  norm = mpl.colors.Normalize(vmin, vmax)
+  sm = plt.cm.ScalarMappable(norm, cmap)
+  return mpl.colormaps[cmap], sm
 
 def make_indexed_color_scale(n: int, cmap = None, special_colors: dict = None) -> tuple[mpl.colors.Colormap, plt.cm.ScalarMappable]:
 

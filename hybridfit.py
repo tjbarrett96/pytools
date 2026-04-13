@@ -21,7 +21,7 @@ import inspect
 import fnmatch
 import numpy as np
 import math
-from typing import Callable, Self
+from typing import Callable#, Self
 
 # =================================================================================================
 
@@ -149,13 +149,13 @@ class Expression:
 
   # ===============================================================================================
 
-  def __add__(self, other: Self) -> Self:
+  def __add__(self, other):
     """Construct new Expression which returns the sum of this Expression and another."""
     return Sum(self, other)
 
   # ===============================================================================================
     
-  def __mul__(self, other: Self) -> Self:
+  def __mul__(self, other):
     """Construct new Expression which returns the product of this Expression and another."""
     return Product(self, other)
 
@@ -737,11 +737,11 @@ class HybridFit:
     # release floating linear parameters in minuit system, call HESSE, then re-fix them
     floating_coeffs = [name for name in [*self._opt_terms, *self._opt_unscaled_terms]]
     if len(floating_coeffs) > 0:
-      self.minuit.fixed[*floating_coeffs] = False
+      self.minuit.fixed[floating_coeffs] = False
     self._fit_linear = False
     self.minuit.hesse()
     if len(floating_coeffs) > 0:
-      self.minuit.fixed[*floating_coeffs] = True
+      self.minuit.fixed[floating_coeffs] = True
     self._fit_linear = True
 
   # ===============================================================================================
@@ -841,7 +841,7 @@ class HybridFit:
       )
 
       if len(coeffs) > 0:
-        self.minuit.values[*coeffs.keys()] = coeffs.values()
+        self.minuit.values[list(coeffs.keys())] = coeffs.values()
 
       # update linear constrained parameters in minuit results
       for name, constraint in self._linear_constraints.items():

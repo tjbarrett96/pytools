@@ -1,10 +1,12 @@
 import scipy.stats
 import numpy as np
 import scipy.linalg as lg
-import dill
+#import dill
+import pickle
 import os
 import re
 import pathlib
+import copy as copylib
 
 import logging
 print = logging.info
@@ -149,20 +151,20 @@ def is_numeric_list(obj):
 
 # ==================================================================================================
   
-def save(obj: object, filename: str) -> None:
+def save(obj: object, filename: str, copy: bool = False) -> None:
   """Saves given object to given filename using dill (pickle) module."""
   directory = os.path.dirname(filename)
   if len(directory) > 0:
     os.makedirs(os.path.dirname(filename), exist_ok = True)
   with open(filename, "wb") as output_file:
-    dill.dump(obj, output_file)
+    pickle.dump(copylib.deepcopy(obj) if copy else obj, output_file)
 
 # ==================================================================================================
     
 def load(filename: str, key: str = None) -> object:
   """Loads object from given filename using dill (pickle) module."""
   with open(filename, "rb") as input_file:
-    data = dill.load(input_file)
+    data = pickle.load(input_file)
     return data[key] if key is not None else data
 
 # ==================================================================================================
