@@ -26,15 +26,19 @@ def fft(x, y, square = True):
   Based on Parseval's theorem: chi^2 = sum(pulls^2) = sum(|FFT|^2) / len(FFT), so the entries of
   |FFT|^2 / len(FFT) yield each FFT frequency bin's contribution to the chi^2.
   """
+  
   # Only want frequencies up to the Nyquist frequency, so use np.fft.rfft.
   fft = np.abs(np.fft.rfft(y))
-  if square:
-    fft = fft**2
-  fft = fft / len(y)
+  
   # But Parseval's theorem includes all FFT bins, including those in the 2nd mirrored half.
   # So double the FFT power in the non-zero bins that would have been counted twice in the chi^2.
+  if square:
+    fft = fft**2
   fft[1:] *= 2
+  
+  fft = fft / len(y)
   f = np.fft.rfftfreq(len(y), x[1] - x[0])
+  
   return f, fft
 
 # ==================================================================================================
@@ -87,6 +91,15 @@ def order_of_magnitude(number):
     return int(np.floor(np.log10(abs(number)))) if number != 0 else 0
   except:
     return 0
+
+# ==================================================================================================
+
+def decimal_places(val, minimum = 0, extra = 0):
+  order = order_of_magnitude(val)
+  places = abs(min(0, order))
+  if places > 0:
+    places += extra
+  return max(minimum, places)
 
 # ==================================================================================================
 
@@ -183,6 +196,11 @@ def p_value(chi2: float, ndf: int) -> float:
   based on the given number of degrees of freedom ('ndf').
   """
   return scipy.stats.chi2.sf(chi2, ndf)
+
+# ==================================================================================================
+
+def find_nearest_value(x, y, x_target):
+  return y[np.argmin(np.abs(x - x_target))]
 
 # ==================================================================================================
 

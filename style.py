@@ -1,4 +1,5 @@
 import matplotlib.pyplot as plt
+import matplotlib.colors as colors
 import matplotlib as mpl
 from matplotlib.backends.backend_pdf import PdfPages
 import numpy as np
@@ -22,6 +23,12 @@ def stretched_figure(width = 1, height = 1):
   top, bottom = (1 - fig.subplotpars.top), fig.subplotpars.bottom
   fig.subplots_adjust(left = left/width, right = (1 - right/width), bottom = bottom/height, top = (1 - top/height))
   return fig
+
+# ==================================================================================================
+
+def ylog():
+  plt.yscale("log")
+  plt.gca().yaxis.get_minor_locator().set_params(numticks = 99, subs = "auto")
 
 # ==================================================================================================
 
@@ -105,10 +112,19 @@ def colorbar(
       if len(ticks) > max_ticks:
         tick_step = int(np.ceil(len(ticks) / max_ticks))
       cbar.set_ticks(ticks[::tick_step])
+      if tick_labels is None:
+        tick_labels = ticks
       cbar.set_ticklabels(tick_labels[::tick_step])
     cbar.minorticks_off()
 
   return cbar
+
+# ==================================================================================================
+
+def arrow(start, end, **props):
+  x1, y1 = start
+  x2, y2 = end
+  return plt.annotate("", (x2, y2), (x1, y1), arrowprops = {"arrowstyle": "simple", "shrinkA": 4, "shrinkB": 3, **props})
 
 # ==================================================================================================
 
@@ -348,29 +364,54 @@ def label_and_save(x_label, y_label, output, clear = True, **legend_kwargs):
 #     units = "" if self.units is None else (rf"\;\text{{{self.units}}}" if align else f" {self.units}")
 #     return rf"{m}{self.sym}{m} {amp}= {self.val:.{places}f}{err}{units}"
 
-def databox(*entries, left = True, top = True, fontsize = 14, **kwargs):
+def databox(*entries, left = True, top = True, fontsize = 14, xshift = 0, yshift = 0, **kwargs):
   plt.text(
-    0.04 if left else 0.96,
-    0.95 if top else 0.05,
+    (0.04 + xshift) if left else (0.96 - xshift),
+    (0.95 - yshift) if top else (0.05 + yshift),
     "\n".join(entries),
     ha = "left" if left else "right",
     va = "top" if top else "bottom",
     transform = plt.gca().transAxes,
-    bbox = {
-      "alpha": plt.rcParams["legend.framealpha"],
-      "facecolor": "white",
-      "edgecolor": plt.rcParams["legend.edgecolor"],
-      "boxstyle": "round"
-    },
+    # bbox = {
+    #   "alpha": plt.rcParams["legend.framealpha"],
+    #   "facecolor": "white",
+    #   "edgecolor": plt.rcParams["legend.edgecolor"],
+    #   "boxstyle": "round"
+    # },
     fontsize = fontsize,
     **kwargs
   )
 
 # ==================================================================================================
 
+def imshow(x, y, heights, label = None, cmap = "coolwarm", log = False, **kwargs):
+  """Override plt.imshow with automatic formatting and colorbar."""
+
+  dx = x[1] - x[0]
+  dy = y[1] - y[0]
+  extent = [
+    (x[0] - dx/2), (x[-1] + dx/2),
+    (y[0] - dy/2), (y[-1] + dy/2)
+  ]
+
+  result = plt.imshow(
+    heights.T,
+    origin = "lower",
+    extent = extent,
+    aspect = 'auto',
+    cmap = cmap,
+    norm = colors.LogNorm() if log else None
+    **kwargs
+  )
+  cbar = colorbar(label = label)
+
+  return result, cbar
+
+# ==================================================================================================
+
 def colormesh(x, y, heights, label = None, cmap = "coolwarm", **kwargs):
   """Override plt.pcolormesh with automatic formatting and colorbar."""
-  result = plt.pcolormesh(x, y, heights.T, cmap = cmap, ec = 'face', lw = 0.5, **kwargs)
+  result = plt.pcolormesh(x, y, heights.T, cmap = cmap, ec = 'none', lw = 0.5, **kwargs)
   cbar = colorbar(label = label)
   return result, cbar
 
@@ -534,8 +575,8 @@ def plot_color_series(
     )
 
 # ==================================================================================================
-    
-def plot_cov(cov, labels = None, remove_nan = True, cmap = "coolwarm", fontsize = 5, is_corr = False):
+
+def plot_cov(cov, labels = None, remove_nan = True, cmap = "coolwarm", fontsize = 10, is_corr = False):
 
   errors = np.sqrt(np.diag(cov))
   if remove_nan:
@@ -550,7 +591,7 @@ def plot_cov(cov, labels = None, remove_nan = True, cmap = "coolwarm", fontsize 
 
   plt.imshow(corr, cmap = cmap, vmin = -1, vmax = 1)
   plt.gca().set_aspect("equal")
-  colorbar()
+  colorbar(label = "Correlation")
 
   if labels is not None:
     masked_labels = [labels[i] for i in range(len(labels)) if mask[i]]
