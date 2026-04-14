@@ -1,5 +1,5 @@
 import numpy as np
-import io
+import itertools
 
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -236,11 +236,11 @@ class Layer:
     self.annotations.append(mpl_text.Text(*self.relpos(*relpos), text, **kwargs))
 
   """Make a mapping from (NodeA, NodeB) -> Connection from each node in this layer to another layer."""
-  def connect(self, other: "Layer", **kwargs):
+  def connect(self, other: "Layer", direct = False, **kwargs):
     result = {}
-    for this_node in self.nodes:
-      for other_node in other.nodes:
-        result[this_node, other_node] = this_node.connect(other_node, **kwargs)
+    node_mapping = zip if direct else itertools.product
+    for this_node, other_node in node_mapping(self.nodes, other.nodes):
+      result[this_node, other_node] = this_node.connect(other_node, **kwargs)
     return result
 
   """Add this layer of nodes to the given or current axes."""
@@ -345,21 +345,24 @@ class Network:
   
   # ------------------------------------------------------------------------------------------------
 
-  def add_layer(self, *args, lstep: float = None, connect: bool = True, **kwargs):
+  def add_layer(self, *args, lstep: float = None, connect: str = "full", **kwargs):
 
     prev_layer = self.layers[-1] if len(self.layers) > 0 else None
-    prev_x = prev_layer.x if prev_layer is not None else self.x
 
     if lstep is None:
       lstep = self.lstep
 
-    new_x = prev_x + lstep
+    if prev_layer is not None:
+      new_x = prev_layer.x + lstep
+    else:
+      new_x = self.x
+
     kwargs = {**self.options, **kwargs}
     new_layer = Layer((new_x, self.y), *args, network = self, **kwargs)
 
     self.layers.append(new_layer)
     if connect and prev_layer is not None:
-      self.connections.update(prev_layer.connect(new_layer))
+      self.connections.update(prev_layer.connect(new_layer, direct = (connect == "direct")))
 
     if self.xmin is None or new_x < self.xmin:
       self.xmin = new_x
@@ -411,6 +414,9 @@ class Attention:
     _, self.ymax = upper_left_node.relpos(1, 1)
     self.xmax = self.xmin + self.width
 
+    self.x = (self.xmin + self.xmax) / 2
+    self.y = (self.ymin + self.ymax) / 2
+
     if pad is None:
       pad = upper_left_node.size
     self.ymin -= pad
@@ -461,6 +467,13 @@ class Attention:
     for connection in self.connections.values():
       connection.draw(ax)
 
+  """Returns 2D coordinate shifted from attention center by (dx, dy) in units of the attention width/height."""
+  def relpos(self, dx: float, dy: float, abs: bool = False) -> np.ndarray:
+    if abs:
+      return np.array([self.x + dx, self.y + dy])
+    else:
+      return np.array([self.x + dx * self.width/2, self.y + dy * self.height/2])
+
 # ------------------------------------------------------------------------------------------------
 
 class MultiNetwork:
@@ -476,7 +489,7 @@ class MultiNetwork:
     self.attentions: list[Attention] = []
 
   def add_layer(self, *args, **kwargs):
-    for network in self.networks:
+    for i, network in enumerate(self.networks):
       network.add_layer(*args, **kwargs)
 
   def add_attention(self):
@@ -485,7 +498,8 @@ class MultiNetwork:
     input_shape = self.networks[0].layers[0].shape
     input_size = self.networks[0].layers[0].size
 
-    self.add_layer(input_len, shape = input_shape, size = input_size)
+    full_connect = (len(self.networks[0].layers) > 1)
+    self.add_layer(input_len, shape = input_shape, size = input_size, connect = True if full_connect else "direct")
     attention = Attention(self)
     self.attentions.append(attention)
     self.add_layer(input_len, lstep = attention.width + input_size, connect = False, shape = input_shape, size = input_size)
