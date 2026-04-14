@@ -1,2 +1,6 @@
 */
 __init__.py
+
+*.pdf
+*.mplstyle
+!pytools.mplstyle

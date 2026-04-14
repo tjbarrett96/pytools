@@ -11,10 +11,7 @@ import pytools.util as util
 
 # ==================================================================================================
 
-# mpl.use("Cairo")
-#plt.style.use(f"{util.path}/gm2.mplstyle")
-plt.style.use(f"{util.path}/custom_gm2.mplstyle")
-# plt.style.use(f"{util.path}/custom.mplstyle")
+plt.style.use(f"{util.path}/pytools.mplstyle")
 
 def default():
   plt.style.use("default")
