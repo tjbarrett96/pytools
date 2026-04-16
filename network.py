@@ -7,8 +7,11 @@ import matplotlib.patches as mpl_patch
 import matplotlib.lines as mpl_line
 import matplotlib.text as mpl_text
 import matplotlib.axes as mpl_axes
+import matplotlib.artist as mpl_artist
 
 from typing import Any, Callable
+
+import pytools.util as util
 
 # TODO: add unit option to relpos, defaults to internal size/width, switch for absolute
 # TODO: add gap variables to npad, lpad to distinguish node/layer sep
@@ -36,18 +39,30 @@ _default_text_opts = {
   "usetex": True
 }
 
+_default_node_opts = {
+  "shape": "round",
+  "size": 1,
+  "anchor": "c"
+}
+
+_default_margin = 0.33
+_default_pad = 0.33
+
 # ------------------------------------------------------------------------------------------------
 
-# wrap matplotlib Patch constructors with common center-width argument structure: x, y, width, **kwargs
-_create_patch = {
-  "circle": lambda x, y, s, **kwargs: mpl_patch.Circle((x, y), s/2, **kwargs),
-  "square": lambda x, y, s, **kwargs: mpl_patch.Rectangle((x-s/2, y-s/2), s, s, **kwargs)
+# positions of named anchor points relative to the node center, in units of (width/2, height/2)
+_default_anchor_rules = {
+  "c": np.array([ 0,  0]),
+  "l": np.array([-1,  0]),
+  "r": np.array([+1,  0]),
+  "t": np.array([ 0, +1]),
+  "b": np.array([ 0, -1])
 }
 
-_default_node_opts = {
-  "shape": "circle",
-  "size": 1
-}
+# add corner anchors with names concatenated like "tr" (top-right)
+for y in ("t", "b"):
+  for x in ("l", "r"):
+    _default_anchor_rules[f"{y[0]}{x[0]}"] = _default_anchor_rules[y] + _default_anchor_rules[x]
 
 # ------------------------------------------------------------------------------------------------
 
@@ -75,62 +90,99 @@ def autoscale(ax: mpl_axes.Axes = None):
 
 class Node:
 
+  # TODO: can also wrap around other group of existing nodes as minimal bounding box with chosen padding
   def __init__(
     self,
-    xy: tuple[float, float],
-    text: str | mpl_text.Text = "",
+    size: float | tuple[float, float] = _default_node_opts["size"],
+    text: str = "",
     shape: str = _default_node_opts["shape"],
-    size: float = _default_node_opts["size"],
-    layer: "Layer" = None,
+    anchor: str = _default_node_opts["anchor"],
+    margin: float = _default_margin,
+    pad: float = _default_pad,
     **kwargs
   ):
 
-    if shape not in _create_patch:
-      raise ValueError(f"Node shape must be one of {list(_create_patch)}.")
+    # width and height
+    if util.is_iterable(size):
+      self.width, self.height = size
+    else:
+      self.width, self.height = size, size
 
-    if size < 0:
-      raise ValueError(f"Node radius must be >= 0.")
-    
-    # reference to parent layer and network
-    self.layer = layer
-    self.network = layer.network
+    # margin (outer spacing) and padding (inner spacing)
+    self.margin = margin
+    self.pad = pad
 
-    # position and radius
-    self.x = xy[0]
-    self.y = xy[1]
-    self.size = size
+    # default center position (before placement)
+    self.xy = np.array([0, 0])
 
-    # shortcuts to common anchor points
-    self.center = self.relpos(0, 0)
-    self.left = self.relpos(-1, 0)
-    self.right = self.relpos(1, 0)
-    self.bottom = self.relpos(0, -1)
-    self.top = self.relpos(0, 1)
+    # dictionary of named anchor positions
+    self.anchors = {anchor: np.array([0, 0]) for anchor in _default_anchor_rules}
+    self._anchor_basis = np.array([self.width/2, self.height/2])
+    self._outer_basis = self._anchor_basis + (self.margin, self.margin)
+    self._inner_basis = self._anchor_basis - (self.pad, self.pad)
+    self._update_anchors()
+
+    # default anchor for this node
+    self.anchor = anchor
 
     # create shape patch object with default options, forwarding any extra keywords
-    kwargs = {**_default_patch_opts, **kwargs}
-    self.patch: mpl_patch.Patch = _create_patch[shape](self.x, self.y, self.size, **kwargs)
+    patch_kwargs = {**_default_patch_opts, **kwargs}
+    # TODO: "round" bbox does not work with pad=0
+    self.patch = mpl_patch.FancyBboxPatch(self["bl"], self.width, self.height, f"{shape},pad=0", **patch_kwargs)
 
-    # create label text object
-    if isinstance(text, mpl_text.Text):
-      self.text = text
-    else:
-      self.text = mpl_text.Text(self.x, self.y, text, **_default_text_opts)
-
-    # additional text annotations other than the central label
+    # list of text annotations placed relative to this node
     self.annotations: list[mpl_text.Text] = []
 
-  """Returns 2D coordinate shifted from node center by (dx, dy) in units of the node radius."""
-  def relpos(self, dx: float, dy: float, abs: bool = False) -> np.ndarray:
-    if abs:
-      return np.array([self.x + dx, self.y + dy])
-    else:
-      return np.array([self.x + dx * self.size/2, self.y + dy * self.size/2])
+    # create label text object
+    self.text = None
+    if text:
+      self.text = mpl_text.Text(self.x, self.y, text, **_default_text_opts)
+      self.annotations.append(self.text)
+
+    # list of dependent nodes placed relative to this node
+    self.relatives: list[Node] = []
+
+  """Update anchor positions relative to the current center position."""
+  def _update_anchors(self):
+    self.x, self.y = self.xy
+    for anchor, relpos in _default_anchor_rules.items():
+      self.anchors[anchor] = self.xy + self._anchor_basis * relpos
+      self.anchors[f"o{anchor}"] = self.xy + self._outer_basis * relpos
+      self.anchors[f"i{anchor}"] = self.xy + self._inner_basis * relpos
+
+  """Returns 2D coordinate shifted from node center by (dx, dy) in units of (width/2, height/2)."""
+  def relpos(self, dx: float, dy: float) -> np.ndarray:
+    return self.xy + self._anchor_basis * (dx, dy)
   
+  """Positions this node (and moves dependents) so that its anchor is located at the given (x, y)."""
+  def place(self, xy: tuple[float, float]):
+    # calculate translation amount, shift center and anchors
+    dr = xy - self.anchors[self.anchor]
+    self.xy = self.xy + dr
+    self._update_anchors()
+    # shift bbox patch
+    self.patch.set_x(self["bl"][0])
+    self.patch.set_y(self["bl"][1])
+    # shift text annotations
+    for text in self.annotations:
+      text.set_position(text.get_position() + dr)
+    # shift other relative nodes
+    for node in self.relatives:
+      node.place(node.anchors[node.anchor] + dr)
+    return self
+  
+  """Shorthand for accessing named anchor points, e.g. node['center'] or node['c']."""
+  def __getitem__(self, anchor: str):
+    # TODO: add some dynamically calculated divisions, like "r(1/4)", "r(2/4)", etc. divides right edge
+    return self.anchors[anchor]
+
   """Add text annotation at the given relative position from node center."""
   def annotate(self, text: str, relpos: tuple[float, float], **kwargs):
     kwargs = {**_default_text_opts, **kwargs}
+    # TODO: accept anchor strings too
+    # TODO: streamline text alignment relative to anchor, e.g. va = "bottom" and ha = "left" is verbose
     self.annotations.append(mpl_text.Text(*self.relpos(*relpos), text, **kwargs))
+    return self
 
   """Make a Connection from this node to another."""
   def connect(self, other: "Node", **kwargs):
@@ -141,20 +193,20 @@ class Node:
     if ax is None:
       ax = plt.gca()
     ax.add_patch(self.patch)
-    ax.add_artist(self.text)
-    for annotation in self.annotations:
-      ax.add_artist(annotation)
+    for text in self.annotations:
+      ax.add_artist(text)
+    # TODO: distinguish between relatives drawn separately, and children assumed to be drawn here
 
-  """Highlights all connections to this node."""
-  def highlight(self, enable: bool = True):
-    if self.network is None:
-      raise ValueError("Highlighted node is missing reference to parent network.")
-    for pair, connection in self.network.connections.items():
-      if self in pair and enable:
-        connection.highlight()
-      else:
-        connection.highlight(False)
-    return self
+  # """Highlights all connections to this node."""
+  # def highlight(self, enable: bool = True):
+  #   if self.network is None:
+  #     raise ValueError("Highlighted node is missing reference to parent network.")
+  #   for pair, connection in self.network.connections.items():
+  #     if self in pair and enable:
+  #       connection.highlight()
+  #     else:
+  #       connection.highlight(False)
+  #   return self
 
   """Set the face color of the node."""
   def color(self, color: str):
