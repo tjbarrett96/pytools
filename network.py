@@ -1,16 +1,27 @@
+# numeric modules
 import numpy as np
+
+# python modules
 import itertools
 
+# matplotlib modules
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+import matplotlib.textpath as mpl_textpath
+import matplotlib.font_manager as mpl_font
 import matplotlib.patches as mpl_patch
 import matplotlib.lines as mpl_line
 import matplotlib.text as mpl_text
 import matplotlib.axes as mpl_axes
+import matplotlib.transforms as mpl_transforms
 import matplotlib.artist as mpl_artist
 
-from typing import Any, Callable
+# type hints
+from typing import Any, Callable, Self
+from collections.abc import Iterable
+from numbers import Number
 
+# local pytools
 import pytools.util as util
 
 # TODO: add unit option to relpos, defaults to internal size/width, switch for absolute
@@ -22,6 +33,11 @@ _default_patch_opts = {
   "color": "white",
   "ec": "k",
   "lw": 0.5
+}
+
+_blank_patch_opts = {
+  "fill": False,
+  "lw": 0
 }
 
 _default_line_opts = {
@@ -45,8 +61,10 @@ _default_node_opts = {
   "anchor": "c"
 }
 
-_default_margin = 0.33
-_default_pad = 0.33
+_default_margin = 0.15
+_default_pad = 0.15
+
+_text_size_conversion = 0.2
 
 # ------------------------------------------------------------------------------------------------
 
@@ -66,13 +84,32 @@ for y in ("t", "b"):
 
 # ------------------------------------------------------------------------------------------------
 
+"""Creates a Figure and Axes with no margins, equal aspect ratio, and no spines."""
+def make_canvas():
+  fig = plt.figure()
+  ax: mpl_axes.Axes = fig.add_axes([0, 0, 1, 1])
+  ax.set_aspect("equal")
+  ax.set_axis_off()
+  return fig, ax
+
+# ------------------------------------------------------------------------------------------------
+
+# TODO: wrap around with Node, since text no longer has its own bbox
+def _make_text_patch(text: str, xy: tuple[float, float] = None, size: float = 1, align: str = "b", **kwargs):
+  if xy is None:
+    xy = (0, 0)
+  text_path = mpl_textpath.TextPath(xy, text, size = size * _text_size_conversion)
+  path_patch = mpl_patch.PathPatch(text_path)
+  return path_patch
+
+# ------------------------------------------------------------------------------------------------
+
 """Sets viewing range for given or current axes to include all artists."""
 def autoscale(ax: mpl_axes.Axes = None):
   
   if ax is None:
     ax = plt.gca()
 
-  ax.set_aspect("equal")
   ax.autoscale_view()
   ax.figure.draw_without_rendering()
 
@@ -88,35 +125,80 @@ def autoscale(ax: mpl_axes.Axes = None):
 
 # ------------------------------------------------------------------------------------------------
 
+"""Returns bounding box (Bbox) for given Patch."""
+def _get_patch_bbox(patch: mpl_patch.Patch):
+  return patch.get_path().get_extents()
+
+"""Translates PathPatch by specified offsets."""
+def _translate_path_patch(patch: mpl_patch.PathPatch, dx: float, dy: float):
+  translate = mpl_transforms.Affine2D().translate(dx, dy)
+  patch.set_path(patch.get_path().transformed(translate))
+
+# ------------------------------------------------------------------------------------------------
+
 class Node:
 
-  # TODO: can also wrap around other group of existing nodes as minimal bounding box with chosen padding
   def __init__(
     self,
-    size: float | tuple[float, float] = _default_node_opts["size"],
-    text: str = "",
+    size: Number | tuple[Number, Number] | Iterable[Self | mpl_patch.PathPatch] = _default_node_opts["size"],
     shape: str = _default_node_opts["shape"],
     anchor: str = _default_node_opts["anchor"],
     margin: float = _default_margin,
     pad: float = _default_pad,
     **kwargs
   ):
+    
+    # default center position (before placement)
+    self.xy = np.array([0.0, 0.0])
 
-    # width and height
-    if util.is_iterable(size):
-      self.width, self.height = size
-    else:
-      self.width, self.height = size, size
+    # z-order
+    self.z = 0
 
     # margin (outer spacing) and padding (inner spacing)
     self.margin = margin
     self.pad = pad
 
-    # default center position (before placement)
-    self.xy = np.array([0, 0])
+    # list of dependent Nodes placed relative to this Node
+    self.relatives: list[Self] = []
+
+    # list of other Nodes that should be drawn with this one
+    self.children: list[Self] = []
+
+    # list of matplotlib PathPatches that should be drawn with this Node
+    # TODO: make this self.annotations, only holding text pathpatches, not wrapped as Nodes, not generic patches
+    # methods to translate and modify patches vary wildly from subtype to subtype, just specialize for one
+    # a Node can contain sub-Nodes, or text (as PathPatch), that's it (pending future updates)
+    self.patches: list[mpl_patch.PathPatch] = []
+
+    # parse node size option
+    if not util.is_iterable(size):
+      # one float (width == height)
+      self.width, self.height = size, size
+    elif isinstance(size[0], Number):
+      # tuple[float, float] ~ (width, height)
+      self.width, self.height = size
+    else:
+      # minimal bounding box around list of other Nodes or Patches
+      patches = [(item.box if isinstance(item, Node) else item) for item in size]
+      bbox = mpl_transforms.Bbox.union([_get_patch_bbox(patch) for patch in patches])
+      # width and height including padding
+      self.width = bbox.width + 2*self.pad
+      self.height = bbox.height + 2*self.pad
+      # center point from lower-left corner
+      self.xy[0] = (bbox.min[0] - self.pad) + self.width/2
+      self.xy[1] = (bbox.min[1] - self.pad) + self.height/2
+      # keep track of any sub-Nodes or Patches contained inside this wrapper
+      for item in size:
+        if isinstance(item, Node):
+          self.children.append(item)
+        else:
+          self.patches.append(item)
+      # set z-order below children
+      if len(self.children) > 0:
+        self.z = min(node.z for node in self.children) - 1
 
     # dictionary of named anchor positions
-    self.anchors = {anchor: np.array([0, 0]) for anchor in _default_anchor_rules}
+    self.anchors = {anchor: np.array([0.0, 0.0]) for anchor in _default_anchor_rules}
     self._anchor_basis = np.array([self.width/2, self.height/2])
     self._outer_basis = self._anchor_basis + (self.margin, self.margin)
     self._inner_basis = self._anchor_basis - (self.pad, self.pad)
@@ -128,19 +210,10 @@ class Node:
     # create shape patch object with default options, forwarding any extra keywords
     patch_kwargs = {**_default_patch_opts, **kwargs}
     # TODO: "round" bbox does not work with pad=0
-    self.patch = mpl_patch.FancyBboxPatch(self["bl"], self.width, self.height, f"{shape},pad=0", **patch_kwargs)
+    self.box = mpl_patch.FancyBboxPatch(self["bl"], self.width, self.height, f"{shape},pad=0", zorder = self.z, **patch_kwargs)
 
-    # list of text annotations placed relative to this node
-    self.annotations: list[mpl_text.Text] = []
-
-    # create label text object
-    self.text = None
-    if text:
-      self.text = mpl_text.Text(self.x, self.y, text, **_default_text_opts)
-      self.annotations.append(self.text)
-
-    # list of dependent nodes placed relative to this node
-    self.relatives: list[Node] = []
+    # initialize placement
+    self.place(self.xy, "c")
 
   """Update anchor positions relative to the current center position."""
   def _update_anchors(self):
@@ -150,38 +223,49 @@ class Node:
       self.anchors[f"o{anchor}"] = self.xy + self._outer_basis * relpos
       self.anchors[f"i{anchor}"] = self.xy + self._inner_basis * relpos
 
-  """Returns 2D coordinate shifted from node center by (dx, dy) in units of (width/2, height/2)."""
-  def relpos(self, dx: float, dy: float) -> np.ndarray:
-    return self.xy + self._anchor_basis * (dx, dy)
-  
-  """Positions this node (and moves dependents) so that its anchor is located at the given (x, y)."""
-  def place(self, xy: tuple[float, float]):
-    # calculate translation amount, shift center and anchors
-    dr = xy - self.anchors[self.anchor]
-    self.xy = self.xy + dr
-    self._update_anchors()
-    # shift bbox patch
-    self.patch.set_x(self["bl"][0])
-    self.patch.set_y(self["bl"][1])
-    # shift text annotations
-    for text in self.annotations:
-      text.set_position(text.get_position() + dr)
-    # shift other relative nodes
-    for node in self.relatives:
-      node.place(node.anchors[node.anchor] + dr)
-    return self
-  
   """Shorthand for accessing named anchor points, e.g. node['center'] or node['c']."""
   def __getitem__(self, anchor: str):
     # TODO: add some dynamically calculated divisions, like "r(1/4)", "r(2/4)", etc. divides right edge
     return self.anchors[anchor]
 
-  """Add text annotation at the given relative position from node center."""
-  def annotate(self, text: str, relpos: tuple[float, float], **kwargs):
+  """Returns 2D coordinate shifted from node center by (dx, dy) in units of (width/2, height/2)."""
+  def relpos(self, dx: float, dy: float) -> np.ndarray:
+    # TODO: consider harmonizing with other usage of tuples instead of separate args
+    return self.xy + self._anchor_basis * (dx, dy)
+  
+  """Positions this node (and moves dependents) so that its anchor is located at the given (x, y)."""
+  def place(self, xy: tuple[float, float], anchor: str = None):
+    if anchor is None:
+      anchor = self.anchor
+    # calculate translation amount, shift center and anchors
+    dr = xy - self.anchors[self.anchor]
+    self.xy = self.xy + dr
+    self._update_anchors()
+    # shift bbox patch
+    self.box.set_x(self["bl"][0])
+    self.box.set_y(self["bl"][1])
+    # shift text annotations
+    for node in self.children:
+      node.place(node.anchors[node.anchor] + dr)
+    for patch in self.patches:
+      _translate_path_patch(patch, *dr)
+    # shift other relative nodes
+    for node in self.relatives:
+      node.place(node.anchors[node.anchor] + dr)
+    return self
+
+  """Parse a specified location as either an anchor string, or relpos tuple."""
+  def _parse_loc(self, loc: str | tuple[float, float]):
+    if isinstance(loc, str):
+      return self.anchors[loc]
+    else:
+      return self.relpos(*loc)
+
+  """Add text annotation at the given location (anchor name or relpos tuple)."""
+  def annotate(self, text: str, loc: str | tuple[float, float], **kwargs):
+    loc = self._parse_loc(loc)
     kwargs = {**_default_text_opts, **kwargs}
-    # TODO: accept anchor strings too
-    # TODO: streamline text alignment relative to anchor, e.g. va = "bottom" and ha = "left" is verbose
-    self.annotations.append(mpl_text.Text(*self.relpos(*relpos), text, **kwargs))
+    self.patches.append(_make_text_patch(text, loc, **kwargs))
     return self
 
   """Make a Connection from this node to another."""
@@ -192,10 +276,13 @@ class Node:
   def draw(self, ax: mpl_axes.Axes = None):
     if ax is None:
       ax = plt.gca()
-    ax.add_patch(self.patch)
-    for text in self.annotations:
-      ax.add_artist(text)
-    # TODO: distinguish between relatives drawn separately, and children assumed to be drawn here
+    ax.add_patch(self.box)
+    for node in self.children:
+      node.draw(ax)
+
+  # TODO: get minimal Bbox around this node and all children/annotations (which may be outside nominal box)
+  def _get_bbox(self):
+    pass
 
   # """Highlights all connections to this node."""
   # def highlight(self, enable: bool = True):
@@ -210,11 +297,11 @@ class Node:
 
   """Set the face color of the node."""
   def color(self, color: str):
-    self.patch.set_facecolor(color)
+    self.box.set_facecolor(color)
     return self
   
 # ------------------------------------------------------------------------------------------------
-    
+
 class Layer:
 
   def __init__(
@@ -308,26 +395,24 @@ class Connection:
 
   def __init__(
     self,
-    start: Node,
-    end: Node,
+    start: Node | tuple[Node, str],
+    end: Node | tuple[Node, str],
     label: str = "",
-    start_relpos: tuple[float, float] = None,
-    end_relpos: tuple[float, float] = None,
     label_relpos: float = 0.5,
     line_kwargs = None,
     text_kwargs = None
   ):
     
-    self.start_node = start
-    self.end_node = end
+    if isinstance(start, Node):
+      start = (start, start.anchor)
+    if isinstance(end, Node):
+      end = (end, end.anchor)
+    
+    self.start_node, self.start_anchor = start
+    self.end_node, self.end_anchor = end
 
-    if start_relpos is None:
-      start_relpos = (1, 0)
-    if end_relpos is None:
-      end_relpos = (-1, 0)
-
-    self.start_pos = self.start_node.relpos(*start_relpos)
-    self.end_pos = self.end_node.relpos(*end_relpos)
+    self.start_pos = self.start_node[self.end_anchor]
+    self.end_pos = self.end_node[self.end_anchor]
     self.vector = self.end_pos - self.start_pos
 
     x0, y0 = self.start_pos
