@@ -49,10 +49,7 @@ _default_line_opts = {
 
 _default_text_opts = {
   "color": "black",
-  "ha": "center",
-  "va": "center",
-  "clip_on": False,
-  "usetex": True
+  "lw": 0
 }
 
 _default_node_opts = {
@@ -94,16 +91,6 @@ def make_canvas():
 
 # ------------------------------------------------------------------------------------------------
 
-# TODO: wrap around with Node, since text no longer has its own bbox
-def _make_text_patch(text: str, xy: tuple[float, float] = None, size: float = 1, align: str = "b", **kwargs):
-  if xy is None:
-    xy = (0, 0)
-  text_path = mpl_textpath.TextPath(xy, text, size = size * _text_size_conversion)
-  path_patch = mpl_patch.PathPatch(text_path)
-  return path_patch
-
-# ------------------------------------------------------------------------------------------------
-
 """Sets viewing range for given or current axes to include all artists."""
 def autoscale(ax: mpl_axes.Axes = None):
   
@@ -125,22 +112,11 @@ def autoscale(ax: mpl_axes.Axes = None):
 
 # ------------------------------------------------------------------------------------------------
 
-"""Returns bounding box (Bbox) for given Patch."""
-def _get_patch_bbox(patch: mpl_patch.Patch):
-  return patch.get_path().get_extents()
-
-"""Translates PathPatch by specified offsets."""
-def _translate_path_patch(patch: mpl_patch.PathPatch, dx: float, dy: float):
-  translate = mpl_transforms.Affine2D().translate(dx, dy)
-  patch.set_path(patch.get_path().transformed(translate))
-
-# ------------------------------------------------------------------------------------------------
-
 class Node:
 
   def __init__(
     self,
-    size: Number | tuple[Number, Number] | Iterable[Self | mpl_patch.PathPatch] = _default_node_opts["size"],
+    size: Number | tuple[Number, Number] | Iterable[Self] = _default_node_opts["size"],
     shape: str = _default_node_opts["shape"],
     anchor: str = _default_node_opts["anchor"],
     margin: float = _default_margin,
@@ -164,12 +140,6 @@ class Node:
     # list of other Nodes that should be drawn with this one
     self.children: list[Self] = []
 
-    # list of matplotlib PathPatches that should be drawn with this Node
-    # TODO: make this self.annotations, only holding text pathpatches, not wrapped as Nodes, not generic patches
-    # methods to translate and modify patches vary wildly from subtype to subtype, just specialize for one
-    # a Node can contain sub-Nodes, or text (as PathPatch), that's it (pending future updates)
-    self.patches: list[mpl_patch.PathPatch] = []
-
     # parse node size option
     if not util.is_iterable(size):
       # one float (width == height)
@@ -178,21 +148,17 @@ class Node:
       # tuple[float, float] ~ (width, height)
       self.width, self.height = size
     else:
-      # minimal bounding box around list of other Nodes or Patches
-      patches = [(item.box if isinstance(item, Node) else item) for item in size]
-      bbox = mpl_transforms.Bbox.union([_get_patch_bbox(patch) for patch in patches])
+      # minimal bounding box around list of other Nodes
+      bbox = mpl_transforms.Bbox.union([node.box.get_bbox() for node in size])
       # width and height including padding
       self.width = bbox.width + 2*self.pad
       self.height = bbox.height + 2*self.pad
       # center point from lower-left corner
       self.xy[0] = (bbox.min[0] - self.pad) + self.width/2
       self.xy[1] = (bbox.min[1] - self.pad) + self.height/2
-      # keep track of any sub-Nodes or Patches contained inside this wrapper
-      for item in size:
-        if isinstance(item, Node):
-          self.children.append(item)
-        else:
-          self.patches.append(item)
+      # keep track of all sub-Nodes contained inside this wrapper
+      for node in size:
+        self.children.append(node)
       # set z-order below children
       if len(self.children) > 0:
         self.z = min(node.z for node in self.children) - 1
@@ -238,7 +204,7 @@ class Node:
     if anchor is None:
       anchor = self.anchor
     # calculate translation amount, shift center and anchors
-    dr = xy - self.anchors[self.anchor]
+    dr = xy - self.anchors[anchor]
     self.xy = self.xy + dr
     self._update_anchors()
     # shift bbox patch
@@ -247,8 +213,6 @@ class Node:
     # shift text annotations
     for node in self.children:
       node.place(node.anchors[node.anchor] + dr)
-    for patch in self.patches:
-      _translate_path_patch(patch, *dr)
     # shift other relative nodes
     for node in self.relatives:
       node.place(node.anchors[node.anchor] + dr)
@@ -265,7 +229,9 @@ class Node:
   def annotate(self, text: str, loc: str | tuple[float, float], **kwargs):
     loc = self._parse_loc(loc)
     kwargs = {**_default_text_opts, **kwargs}
-    self.patches.append(_make_text_patch(text, loc, **kwargs))
+    node = Text(text, **kwargs)
+    node.place(loc)
+    self.children.append(node)
     return self
 
   """Make a Connection from this node to another."""
@@ -300,6 +266,47 @@ class Node:
     self.box.set_facecolor(color)
     return self
   
+# ------------------------------------------------------------------------------------------------
+
+class Text(Node):
+
+  def __init__(self, text: str, size: float = 1, **kwargs):
+
+    # create text patch with bottom-left corner at (0, 0)
+    path = mpl_textpath.TextPath((0, 0), text, size = size * _text_size_conversion)
+    self.patch = mpl_patch.PathPatch(path, **_default_text_opts)
+
+    # get dimensions of text patch
+    bbox = self.patch.get_path().get_extents()
+    width, height = bbox.width, bbox.height
+
+    # translate text patch to be centered on (0, 0) to match Node
+    self._translate_text_patch(-width/2, -height/2)
+
+    # create bounding Node
+    node_opts = {**_blank_patch_opts, "pad": 0, "margin": 0, **kwargs}
+    super().__init__(size = (width, height), **node_opts)
+
+  """Translate the text patch alone."""
+  def _translate_text_patch(self, dx: float, dy: float):
+    translate = mpl_transforms.Affine2D().translate(dx, dy)
+    self.patch.set_path(self.patch.get_path().transformed(translate))
+
+  """Overrides Node.place() to additionally place the text patch."""
+  def place(self, xy: tuple[float, float], anchor: str = None):
+    if anchor is None:
+      anchor = self.anchor
+    dr = xy - self.anchors[anchor]
+    self._translate_text_patch(*dr)
+    super().place(xy, anchor)
+
+  """Overrides Node.draw() to additionally draw the text patch."""
+  def draw(self, ax: mpl_axes.Axes = None):
+    super().draw(ax)
+    if ax is None:
+      ax = plt.gca()
+    ax.add_patch(self.patch)
+
 # ------------------------------------------------------------------------------------------------
 
 class Layer:
