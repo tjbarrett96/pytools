@@ -117,7 +117,7 @@ class Node:
 
   def __init__(
     self,
-    size: Number | tuple[Number, Number] | Iterable[Self] = _default_node_opts["size"],
+    size: Number | tuple[Number, Number] | Self | Iterable[Self] = _default_node_opts["size"],
     shape: str = _default_node_opts["shape"],
     anchor: str = _default_node_opts["anchor"],
     margin: float = _default_margin,
@@ -141,6 +141,10 @@ class Node:
     # list of other Nodes that should be drawn with this one
     self.children: list[Self] = []
 
+    # wrap single-Node argument as iterable list
+    if isinstance(size, Node):
+      size = [size]
+
     # parse node size option
     if not util.is_iterable(size):
       # one float (width == height)
@@ -150,7 +154,7 @@ class Node:
       self.width, self.height = size
     else:
       # minimal bounding box around list of other Nodes
-      bbox = mpl_transforms.Bbox.union([node.box.get_bbox() for node in size])
+      bbox = mpl_transforms.Bbox.union([node._get_bbox() for node in size])
       # width and height including padding
       self.width = bbox.width + 2*self.pad
       self.height = bbox.height + 2*self.pad
@@ -234,7 +238,7 @@ class Node:
       return self.relpos(*loc)
 
   """Add text annotation at the given location (anchor name or relpos tuple)."""
-  def annotate(self, text: str, loc: str | tuple[float, float] = "c", **kwargs):
+  def label(self, text: str, loc: str | tuple[float, float] = "c", **kwargs):
     loc = self._parse_loc(loc)
     kwargs = {**_default_text_opts, **kwargs}
     node = Text(text, **kwargs).place(loc)
@@ -254,9 +258,9 @@ class Node:
       node.draw(ax)
     return self
 
-  # TODO: get minimal Bbox around this node and all children/annotations (which may be outside nominal box)
+  """Returns minimal bounding box (Bbox) around this node and all children, including text."""
   def _get_bbox(self):
-    pass
+    return mpl_transforms.Bbox.union([node.box.get_bbox() for node in [self, *self.children]])
 
   # """Highlights all connections to this node."""
   # def highlight(self, enable: bool = True):
