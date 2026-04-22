@@ -60,6 +60,7 @@ _default_node_opts = {
 
 _default_margin = 0.15
 _default_pad = 0.15
+_default_rounding_size = 0.1
 
 _text_size_conversion = 0.2
 
@@ -175,8 +176,14 @@ class Node:
 
     # create shape patch object with default options, forwarding any extra keywords
     patch_kwargs = {**_default_patch_opts, **kwargs}
-    # TODO: "round" bbox does not work with pad=0
-    self.box = mpl_patch.FancyBboxPatch(self["bl"], self.width, self.height, f"{shape},pad=0", zorder = self.z, **patch_kwargs)
+    self.box = mpl_patch.FancyBboxPatch(
+      self["bl"],
+      self.width,
+      self.height,
+      f"{shape}, pad = 0, rounding_size = {_default_rounding_size}",
+      zorder = self.z,
+      **patch_kwargs
+    )
 
     # initialize placement
     self.place(self.xy, "c")
@@ -229,6 +236,8 @@ class Node:
   def annotate(self, text: str, loc: str | tuple[float, float], **kwargs):
     loc = self._parse_loc(loc)
     kwargs = {**_default_text_opts, **kwargs}
+    # TODO: some kwargs collide between text patch and bounding box, like "lw", color, etc. should separate somehow
+    # e.g. Text is *always* no-box, and must be wrapped by Node() to draw box, e.g. Node(Text("my_text", color = "blue"), color = "black")
     node = Text(text, **kwargs)
     node.place(loc)
     self.children.append(node)
