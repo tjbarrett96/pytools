@@ -36,7 +36,7 @@ _default_patch_opts = {
 }
 
 _blank_patch_opts = {
-  "fill": False,
+  **_default_patch_opts,
   "lw": 0
 }
 
@@ -62,23 +62,34 @@ _default_margin = 0.15
 _default_pad = 0.15
 _default_rounding_size = 0.1
 
+# conversion factor so that font size ~1 is appropriate for box widths ~1
 _text_size_conversion = 0.2
 
 # ------------------------------------------------------------------------------------------------
 
-# positions of named anchor points relative to the node center, in units of (width/2, height/2)
-_default_anchor_rules = {
-  "c": np.array([ 0,  0]),
-  "l": np.array([-1,  0]),
-  "r": np.array([+1,  0]),
-  "t": np.array([ 0, +1]),
-  "b": np.array([ 0, -1])
+_anchor_shorthand = {
+  "c": "center",
+  "t": "top",
+  "b": "bottom",
+  "o": "outer",
+  "i": "inner",
+  "l": "left",
+  "r": "right"
 }
 
-# add corner anchors with names concatenated like "tr" (top-right)
-for y in ("t", "b"):
-  for x in ("l", "r"):
-    _default_anchor_rules[f"{y[0]}{x[0]}"] = _default_anchor_rules[y] + _default_anchor_rules[x]
+# positions of named anchor points relative to the node center, in units of (width/2, height/2)
+_default_anchor_rules = {
+  "center": np.array([ 0,  0]),
+  "top": np.array([ 0, +1]),
+  "bottom": np.array([ 0, -1]),
+  "left": np.array([-1,  0]),
+  "right": np.array([+1,  0])
+}
+
+# add corner anchors with hyphenated names like "top-right"
+for y in ("top", "bottom"):
+  for x in ("left", "right"):
+    _default_anchor_rules[f"{y}-{x}"] = _default_anchor_rules[y] + _default_anchor_rules[x]
 
 # ------------------------------------------------------------------------------------------------
 
@@ -198,13 +209,21 @@ class Node:
     self.x, self.y = self.xy
     for anchor, relpos in _default_anchor_rules.items():
       self.anchors[anchor] = self.xy + self._anchor_basis * relpos
-      self.anchors[f"o{anchor}"] = self.xy + self._outer_basis * relpos
-      self.anchors[f"i{anchor}"] = self.xy + self._inner_basis * relpos
+      if anchor == "center":
+        continue
+      self.anchors[f"outer-{anchor}"] = self.xy + self._outer_basis * relpos
+      self.anchors[f"inner-{anchor}"] = self.xy + self._inner_basis * relpos
+
+  """Expand shorthand anchors into full names."""
+  def _parse_anchor(self, anchor: str):
+    if anchor in self.anchors:
+      return anchor
+    return "-".join([_anchor_shorthand[char] for char in anchor])
 
   """Shorthand for accessing named anchor points, e.g. node['center'] or node['c']."""
   def __getitem__(self, anchor: str):
     # TODO: add some dynamically calculated divisions, like "r(1/4)", "r(2/4)", etc. divides right edge
-    return self.anchors[anchor]
+    return self.anchors[self._parse_anchor(anchor)]
 
   """Returns 2D coordinate shifted from node center by (dx, dy) in units of (width/2, height/2)."""
   def relpos(self, dx: float, dy: float) -> np.ndarray:
@@ -216,7 +235,7 @@ class Node:
     if anchor is None:
       anchor = self.anchor
     # calculate translation amount, shift center and anchors
-    dr = xy - self.anchors[anchor]
+    dr = xy - self[anchor]
     self.xy = self.xy + dr
     self._update_anchors()
     # shift bbox patch
@@ -224,21 +243,23 @@ class Node:
     self.box.set_y(self["bl"][1])
     # shift text annotations
     for node in self.children:
-      node.place(node.anchors[node.anchor] + dr)
+      node.place(node[node.anchor] + dr)
     # shift other relative nodes
     for node in self.relatives:
-      node.place(node.anchors[node.anchor] + dr)
+      node.place(node[node.anchor] + dr)
     return self
 
   """Parse a specified location as either an anchor string, or relpos tuple."""
   def _parse_loc(self, loc: str | tuple[float, float]):
     if isinstance(loc, str):
-      return self.anchors[loc]
+      return self[loc]
     else:
       return self.relpos(*loc)
 
   """Add text annotation at the given location (anchor name or relpos tuple)."""
   def label(self, text: str, loc: str | tuple[float, float] = "c", **kwargs):
+    # TODO: default text anchors based on position if not specified manually
+    # e.g. outer -> opposite of loc, inner -> same as loc, else "center"
     loc = self._parse_loc(loc)
     kwargs = {**_default_text_opts, **kwargs}
     node = Text(text, **kwargs).place(loc)
@@ -287,8 +308,12 @@ class Text(Node):
     text: str,
     anchor: str = _default_node_opts["anchor"],
     size: float = 1,
+    fill: bool = True,
     **kwargs
   ):
+    
+    # original string data
+    self.text = text
 
     # create text path with bottom-left corner near (0, 0)
     self.path = mpl_textpath.TextPath((0, 0), text, size = size * _text_size_conversion, usetex = True)
@@ -306,7 +331,7 @@ class Text(Node):
     self._translate_text_patch(-width/2 - x0, -height/2 - y0)
 
     # create empty bounding Node
-    node_opts = {**_blank_patch_opts, "pad": 0, "margin": 0}
+    node_opts = {**_blank_patch_opts, "fill": fill}
     super().__init__(size = (width, height), anchor = anchor, **node_opts)
 
   """Translate the text patch alone."""
@@ -318,7 +343,7 @@ class Text(Node):
   def place(self, xy: tuple[float, float], anchor: str = None):
     if anchor is None:
       anchor = self.anchor
-    dr = xy - self.anchors[anchor]
+    dr = xy - self[anchor]
     self._translate_text_patch(*dr)
     super().place(xy, anchor)
     return self
