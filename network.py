@@ -180,7 +180,8 @@ class Node:
       self["bl"],
       self.width,
       self.height,
-      f"{shape}, pad = 0, rounding_size = {_default_rounding_size}",
+      f"{shape}, pad = 0" \
+        + (f", rounding_size = {_default_rounding_size}" if shape == "round" else ""),
       zorder = self.z,
       **patch_kwargs
     )
@@ -233,13 +234,10 @@ class Node:
       return self.relpos(*loc)
 
   """Add text annotation at the given location (anchor name or relpos tuple)."""
-  def annotate(self, text: str, loc: str | tuple[float, float], **kwargs):
+  def annotate(self, text: str, loc: str | tuple[float, float] = "c", **kwargs):
     loc = self._parse_loc(loc)
     kwargs = {**_default_text_opts, **kwargs}
-    # TODO: some kwargs collide between text patch and bounding box, like "lw", color, etc. should separate somehow
-    # e.g. Text is *always* no-box, and must be wrapped by Node() to draw box, e.g. Node(Text("my_text", color = "blue"), color = "black")
-    node = Text(text, **kwargs)
-    node.place(loc)
+    node = Text(text, **kwargs).place(loc)
     self.children.append(node)
     return self
 
@@ -254,6 +252,7 @@ class Node:
     ax.add_patch(self.box)
     for node in self.children:
       node.draw(ax)
+    return self
 
   # TODO: get minimal Bbox around this node and all children/annotations (which may be outside nominal box)
   def _get_bbox(self):
@@ -279,22 +278,32 @@ class Node:
 
 class Text(Node):
 
-  def __init__(self, text: str, size: float = 1, **kwargs):
+  def __init__(
+    self,
+    text: str,
+    anchor: str = _default_node_opts["anchor"],
+    size: float = 1,
+    **kwargs
+  ):
 
-    # create text patch with bottom-left corner at (0, 0)
-    path = mpl_textpath.TextPath((0, 0), text, size = size * _text_size_conversion)
-    self.patch = mpl_patch.PathPatch(path, **_default_text_opts)
+    # create text path with bottom-left corner near (0, 0)
+    self.path = mpl_textpath.TextPath((0, 0), text, size = size * _text_size_conversion, usetex = True)
 
-    # get dimensions of text patch
+    # convert path into patch, passing any keyword args for color, etc.
+    patch_opts = {**_default_text_opts, **kwargs}
+    self.patch = mpl_patch.PathPatch(self.path, **patch_opts)
+
+    # get actual position and dimensions of text patch, won't be precisely at (0, 0)
     bbox = self.patch.get_path().get_extents()
+    x0, y0 = bbox.min
     width, height = bbox.width, bbox.height
 
-    # translate text patch to be centered on (0, 0) to match Node
-    self._translate_text_patch(-width/2, -height/2)
+    # translate text patch to be centered on (0, 0) to match initialized Node
+    self._translate_text_patch(-width/2 - x0, -height/2 - y0)
 
-    # create bounding Node
-    node_opts = {**_blank_patch_opts, "pad": 0, "margin": 0, **kwargs}
-    super().__init__(size = (width, height), **node_opts)
+    # create empty bounding Node
+    node_opts = {**_blank_patch_opts, "pad": 0, "margin": 0}
+    super().__init__(size = (width, height), anchor = anchor, **node_opts)
 
   """Translate the text patch alone."""
   def _translate_text_patch(self, dx: float, dy: float):
@@ -308,6 +317,7 @@ class Text(Node):
     dr = xy - self.anchors[anchor]
     self._translate_text_patch(*dr)
     super().place(xy, anchor)
+    return self
 
   """Overrides Node.draw() to additionally draw the text patch."""
   def draw(self, ax: mpl_axes.Axes = None):
@@ -315,6 +325,7 @@ class Text(Node):
     if ax is None:
       ax = plt.gca()
     ax.add_patch(self.patch)
+    return self
 
 # ------------------------------------------------------------------------------------------------
 
