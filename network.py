@@ -221,9 +221,23 @@ class Node:
     return "-".join([_anchor_shorthand[char] for char in anchor])
 
   """Shorthand for accessing named anchor points, e.g. node['center'] or node['c']."""
-  def __getitem__(self, anchor: str):
-    # TODO: add some dynamically calculated divisions, like "r(1/4)", "r(2/4)", etc. divides right edge
-    return self.anchors[self._parse_anchor(anchor)]
+  def __getitem__(self, args):
+    dx, dy = 0, 0
+    if isinstance(args, tuple):
+      anchor, div = args
+    else:
+      anchor, div = args, None
+    anchor = self._parse_anchor(anchor)
+    if div is not None:
+      if anchor in ("left", "right"):
+        step = self.height / (div[1] + 1)
+        dy = -div[0] * step
+        anchor = f"top-{anchor}"
+      elif anchor in ("top", "bottom"):
+        step = self.width / (div[1] + 1)
+        dx = div[0] * step
+        anchor = f"{anchor}-left"        
+    return self.anchors[anchor] + (dx, dy)
 
   """Returns 2D coordinate shifted from node center by (dx, dy) in units of (width/2, height/2)."""
   def relpos(self, dx: float, dy: float) -> np.ndarray:
