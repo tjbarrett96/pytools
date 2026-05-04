@@ -197,7 +197,7 @@ class Node:
     if string is None:
       return None, None, None
     match = re.match(r"(?P<anchor>[\w\-]+)(?:\((?P<index>\d+)/(?P<divisions>\d+)\))?", string)
-    anchor = match["anchor"] if match["anchor"] in self.anchors else "-".join([_anchor_shorthand[char] for char in string])
+    anchor = match["anchor"] if match["anchor"] in self.anchors else "-".join([_anchor_shorthand[char] for char in match["anchor"]])
     index = int(match["index"]) if match["index"] else 0
     divisions = int(match["divisions"]) if match["divisions"] else 0
     return anchor, index, divisions
@@ -251,6 +251,8 @@ class Node:
 
   """Add text annotation at the given location (anchor name or relpos tuple)."""
   def label(self, text: str, location: str | tuple[float, float] = "c", **kwargs):
+
+    # TODO: Node.label() should return self for chaining? or label text node for external reference?
 
     # TODO: default text anchors based on position if not specified manually
     # e.g. outer -> opposite of loc, inner -> same as loc, else "center"
