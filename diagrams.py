@@ -250,7 +250,7 @@ class Node:
       return self.relpos(*location)
 
   """Add text annotation at the given location (anchor name or relpos tuple)."""
-  def label(self, text: str, location: str | tuple[float, float] = "c", **kwargs):
+  def label(self, text: str, location: str | tuple[float, float] = "c", anchor: str = None, **kwargs):
 
     # TODO: Node.label() should return self for chaining? or label text node for external reference?
 
@@ -261,17 +261,18 @@ class Node:
     # e.g. preferred label placement relative to itself, if not otherwise specified
 
     position = self._parse_location(location)
-    text_anchor, _, _ = self._parse_anchor(kwargs.get("anchor", None))
-    if text_anchor is None and isinstance(location, str):
-      node_anchor, _, _ = self._parse_anchor(location)
-      text_anchor = "c"
-      if "left" in node_anchor:
-        text_anchor = "outer-right"
-      elif "right" in node_anchor:
-        text_anchor = "outer-left"
-      kwargs["anchor"] = text_anchor
+    anchor, _, _ = self._parse_anchor(anchor)
 
-    node = Text(text, **kwargs).place(position)
+    if anchor is None:
+      anchor = "center"
+      if isinstance(location, str):
+        node_anchor, _, _ = self._parse_anchor(location)
+        if "left" in node_anchor:
+          anchor = "outer-right"
+        elif "right" in node_anchor:
+          anchor = "outer-left"
+
+    node = Text(text, anchor, **kwargs).place(position)
     self.children.append(node)
 
     return self
@@ -319,6 +320,7 @@ _default_text_opts = {
   "lw": 0
 }
 
+# TODO: position by text baseline / topline rather than full box extents?
 class Text(Node):
 
   def __init__(
@@ -326,7 +328,7 @@ class Text(Node):
     text: str,
     anchor: str = "c",
     size: float = 1,
-    margin = 0.1,
+    margin = 0.05,
     **kwargs
   ):
     
@@ -380,6 +382,68 @@ class Text(Node):
     return self
 
 # ------------------------------------------------------------------------------------------------
+
+_default_line_opts = {
+  "color": "black",
+  "lw": 1,
+  "shrinkA": 0,
+  "shrinkB": 0,
+  "mutation_scale": 10,
+  "mutation_aspect": 1.5,
+  "arrowstyle": "-"
+}
+
+# TODO: commit to Connections being 1D objects that are not Nodes; for Node-like behavior, use Node
+# TODO: arrow head sizes are in points, so re-scale with image zoom; make fixed like text by converting to PathPatch?
+# TODO: provide Nodes as inputs, to use patchA and patchB for automatic line clipping?
+# TODO: auto-size based on text label + margin on either end?
+class Connection:
+
+  def __init__(
+    self,
+    start: tuple[float, float],
+    end: tuple[float, float],
+    **kwargs
+  ):
+    
+    # TODO: ensure ndarrays
+    self.start = start
+    self.end = end
+    self.vector = self.end - self.start
+
+    self.line = mpl_patch.FancyArrowPatch(self.start, self.end, **{**_default_line_opts, **kwargs})
+    self.labels: list[Text] = []
+
+  """Returns 2D coordinate at given fraction along the line."""
+  def relpos(self, frac: float = 0.5) -> np.ndarray:
+    # TODO: calculate arc length and support fractional position along arbitrary Paths (Bezier)
+    return self.start + frac * self.vector
+  
+  """Add this connection between nodes to the given or current axes."""
+  def draw(self, ax: mpl_axes.Axes = None):
+    if ax is None:
+      ax = plt.gca()
+    ax.add_patch(self.line)
+    for label in self.labels:
+      label.draw()
+
+  """Add text annotation at the given location (anchor name or relpos tuple)."""
+  def label(self, text: str, frac: float = 0.5, anchor: str = "outer-bottom", **kwargs):
+    position = self.relpos(frac)
+    node = Text(text, anchor, **kwargs).place(position)
+    self.labels.append(node)
+    return self
+
+  # """Set highlighted state on or off."""
+  # def highlight(self, enable: bool = True):
+  #   if enable:
+  #     self.line.set_linewidth(1.5)
+  #     self.line.set_alpha(1)
+  #   else:
+  #     self.line.set_linewidth(1)
+  #     self.line.set_alpha(0.25)
+
+# # ------------------------------------------------------------------------------------------------
 
 # class Layer:
 
@@ -467,72 +531,6 @@ class Text(Node):
 #       node.draw(ax)
 #     for annotation in self.annotations:
 #       ax.add_artist(annotation)
-
-# # ------------------------------------------------------------------------------------------------
-      
-_default_line_opts = {
-  "color": "black",
-  "alpha": 0.25,
-  "lw": 1,
-  "zorder": 0
-}
-
-# class Connection:
-
-#   def __init__(
-#     self,
-#     start: Node | tuple[Node, str],
-#     end: Node | tuple[Node, str],
-#     label: str = "",
-#     label_relpos: float = 0.5,
-#     line_kwargs = None,
-#     text_kwargs = None
-#   ):
-    
-#     if isinstance(start, Node):
-#       start = (start, start.anchor)
-#     if isinstance(end, Node):
-#       end = (end, end.anchor)
-    
-#     self.start_node, self.start_anchor = start
-#     self.end_node, self.end_anchor = end
-
-#     self.start_pos = self.start_node[self.end_anchor]
-#     self.end_pos = self.end_node[self.end_anchor]
-#     self.vector = self.end_pos - self.start_pos
-
-#     x0, y0 = self.start_pos
-#     x1, y1 = self.end_pos
-
-#     if line_kwargs is None:
-#       line_kwargs = {}
-#     line_kwargs = {**_default_line_opts, **line_kwargs}
-#     self.line = mpl_line.Line2D([x0, x1], [y0, y1], **line_kwargs)
-
-#     if text_kwargs is None:
-#       text_kwargs = {}
-#     text_kwargs = {**_default_text_opts, "bbox": {"color": "white"}, **text_kwargs}
-#     self.text = mpl_text.Text(*self.relpos(label_relpos), label, **text_kwargs)
-
-#   """Returns 2D coordinate at given fraction along the line."""
-#   def relpos(self, frac: float = 0.5) -> np.ndarray:
-#     return self.start_pos + frac * self.vector
-  
-#   """Add this connection between nodes to the given or current axes."""
-#   def draw(self, ax: mpl_axes.Axes = None):
-#     if ax is None:
-#       ax = plt.gca()
-#     ax.add_line(self.line)
-#     ax.add_artist(self.text)
-
-#   """Set highlighted state on or off."""
-#   def highlight(self, enable: bool = True):
-#     if enable:
-#       self.line.set_linewidth(1.5)
-#       self.line.set_alpha(1)
-#     else:
-#       self.line.set_linewidth(1)
-#       self.line.set_alpha(0.25)
 
 # # ------------------------------------------------------------------------------------------------
 
