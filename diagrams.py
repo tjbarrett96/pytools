@@ -3,6 +3,7 @@ import numpy as np
 
 # python modules
 import itertools
+import re
 
 # matplotlib modules
 import matplotlib as mpl
@@ -191,30 +192,30 @@ class Node:
       self.anchors[f"outer-{anchor}"] = self.xy + self._outer_basis * relpos
       self.anchors[f"inner-{anchor}"] = self.xy + self._inner_basis * relpos
 
-  """Expand shorthand anchors into full names."""
-  def _parse_anchor(self, anchor: str):
-    if anchor in self.anchors:
-      return anchor
-    return "-".join([_anchor_shorthand[char] for char in anchor])
+  """Parse anchor string format 'anchor(index/divisions)' including shorthand anchor names."""
+  def _parse_anchor(self, string: str) -> tuple[str, int, int]:
+    if string is None:
+      return None, None, None
+    match = re.match(r"(?P<anchor>[\w\-]+)(?:\((?P<index>\d+)/(?P<divisions>\d+)\))?", string)
+    anchor = match["anchor"] if match["anchor"] in self.anchors else "-".join([_anchor_shorthand[char] for char in string])
+    index = int(match["index"]) if match["index"] else 0
+    divisions = int(match["divisions"]) if match["divisions"] else 0
+    return anchor, index, divisions
 
   """Shorthand for accessing named anchor points, e.g. node['center'] or node['c']."""
-  def __getitem__(self, args):
+  def __getitem__(self, anchor: str):
+    anchor, index, divisions = self._parse_anchor(anchor)
+    # TODO: support inner and outer box divisions
     dx, dy = 0, 0
-    # if multiple args wrapped into tuple, interpret as [anchor, (div_index, div_total)]
-    if isinstance(args, tuple):
-      anchor, div = args
-    else:
-      anchor, div = args, None
-    anchor = self._parse_anchor(anchor)
-    if div is not None:
+    if index and divisions:
       if anchor in ("left", "right"):
-        step = self.height / (div[1] + 1)
-        dy = -div[0] * step
+        step = self.height / (divisions + 1)
+        dy = -index * step
         anchor = f"top-{anchor}"
       elif anchor in ("top", "bottom"):
-        step = self.width / (div[1] + 1)
-        dx = div[0] * step
-        anchor = f"{anchor}-left"        
+        step = self.width / (divisions + 1)
+        dx = index * step
+        anchor = f"{anchor}-left"
     return self.anchors[anchor] + (dx, dy)
 
   """Returns 2D coordinate shifted from node center by (dx, dy) in units of (width/2, height/2)."""
@@ -242,20 +243,35 @@ class Node:
     return self
 
   """Parse a specified location as either an anchor string, or relpos tuple."""
-  def _parse_loc(self, loc: str | tuple[float, float]):
-    if isinstance(loc, str):
-      return self[loc]
+  def _parse_location(self, location: str | tuple[float, float]):
+    if isinstance(location, str):
+      return self[location]
     else:
-      return self.relpos(*loc)
+      return self.relpos(*location)
 
   """Add text annotation at the given location (anchor name or relpos tuple)."""
-  def label(self, text: str, loc: str | tuple[float, float] = "c", **kwargs):
+  def label(self, text: str, location: str | tuple[float, float] = "c", **kwargs):
+
     # TODO: default text anchors based on position if not specified manually
     # e.g. outer -> opposite of loc, inner -> same as loc, else "center"
-    loc = self._parse_loc(loc)
-    kwargs = {**_default_text_opts, **kwargs}
-    node = Text(text, **kwargs).place(loc)
+
+    # TODO: consider consolidating anchor information / behavior in Anchor class?
+    # e.g. preferred label placement relative to itself, if not otherwise specified
+
+    position = self._parse_location(location)
+    text_anchor, _, _ = self._parse_anchor(kwargs.get("anchor", None))
+    if text_anchor is None and isinstance(location, str):
+      node_anchor, _, _ = self._parse_anchor(location)
+      text_anchor = "c"
+      if "left" in node_anchor:
+        text_anchor = "outer-right"
+      elif "right" in node_anchor:
+        text_anchor = "outer-left"
+      kwargs["anchor"] = text_anchor
+
+    node = Text(text, **kwargs).place(position)
     self.children.append(node)
+
     return self
 
   # """Make a Connection from this node to another."""
@@ -293,13 +309,13 @@ class Node:
   
 # ------------------------------------------------------------------------------------------------
 
+# conversion factor so that font size ~1 is appropriate for box widths ~1
+_text_size_conversion = 0.2
+
 _default_text_opts = {
   "color": "black",
   "lw": 0
 }
-
-# conversion factor so that font size ~1 is appropriate for box widths ~1
-_text_size_conversion = 0.2
 
 class Text(Node):
 
@@ -308,6 +324,7 @@ class Text(Node):
     text: str,
     anchor: str = "c",
     size: float = 1,
+    margin = 0.1,
     **kwargs
   ):
     
@@ -333,7 +350,7 @@ class Text(Node):
     super().__init__(
       size = (width, height),
       anchor = anchor,
-      margin = 0,
+      margin = margin,
       pad = 0,
       **_blank_patch_opts
     )
