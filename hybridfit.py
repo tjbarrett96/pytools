@@ -883,7 +883,9 @@ class HybridFit:
       self.chi2ndf = self.chi2 / self.ndf
       self.chi2ndf_err = self.chi2_err / self.ndf
       self.pval = util.p_value(self.chi2, self.ndf)
-      self.curve = function_eval #self(self.minuit.values, self.data.x)
+
+      # re-evaluate over full data range (in case fit was masked)
+      self.curve = self(self.minuit.values, self.data.x)
 
       if verbose:
         self.print(only_floating = print_only_floating)
