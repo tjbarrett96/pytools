@@ -6,8 +6,8 @@ import functools
 import itertools
 import matplotlib.pyplot as plt
 
-import logging
-print = logging.info
+# import logging
+#print = logging.info
 
 import iminuit
 from iminuit.cost import LeastSquares
@@ -419,7 +419,7 @@ class HybridFit:
   # ===============================================================================================
 
   def mask(self, condition: np.ndarray):
-    self.cost.mask(condition)
+    self.cost.mask = condition
 
   def unmask(self):
     self.cost.mask = None
@@ -717,9 +717,10 @@ class HybridFit:
       const = self._opt_const.eval(p, t)
       unscaled_const = self._opt_unscaled_const.eval(p, t)
       result = scale * (const + self._sum_opt_terms(p, t)) + self._sum_opt_unscaled_terms(p, t) + unscaled_const
-      if result.shape != self.data.y.shape:
+      data_shape = (self.data.y if self.cost.mask is None else self.data.y[self.cost.mask]).shape
+      if result.shape != data_shape:
         # broadcast to match data shape if needed (in edge cases where everything was just a number)
-        result = result * np.ones(self.data.y.shape)
+        result = result * np.ones(data_shape)
 
     # update linear constrained parameters
     for name, constraint in self._linear_constraints.items():
