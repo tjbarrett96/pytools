@@ -129,9 +129,8 @@ class Expression:
     """Evaluate expression from global parameter dictionary using this expression's known parameter names."""
     args = [p[name] for name in self.parameters]
     #t_same = (t == self.t_cache).all()
-    # t_same = (self.t_cache is not None and t is not None and len(t) == len(self.t_cache))# and t[0] == self.t_cache[0] and t[-1] == self.t_cache[-1])
-    # if t_same and (args == self.p_cache):
-    if args == self.p_cache:
+    t_same = (self.t_cache is not None and t is not None and len(t) == len(self.t_cache))# and t[0] == self.t_cache[0] and t[-1] == self.t_cache[-1])
+    if (args == self.p_cache) and t_same:
       return self.val_cache
     else:
       result = self._function(t, *args)
