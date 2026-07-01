@@ -50,19 +50,18 @@ class Expression:
     self,
     function: Callable[..., np.ndarray | np.number] | np.ndarray | np.number,
     guesses: dict[str, float] = None,
-    bounds: dict[str, float] = None,
+    bounds: dict[str, tuple[float, float]] = None,
     label: str = None
   ):
 
     # store function for internal use
     if isinstance(function, (np.ndarray, np.number, int, float)):
       self._function = (lambda t: function * (np.ones(len(t)) if t is not None else 1))
-      # self._function = lambda t: function
-      signature = {}
     else:
       self._function = function
-      # get list of parameter names from function signature
-      signature = inspect.signature(function).parameters if function is not None else {}
+
+    # get list of parameter names from function signature
+    signature = inspect.signature(self._function).parameters if self._function is not None else {}
 
     # get parameter names and initial guesses from default values in function signature
     self.parameters = {
@@ -82,7 +81,7 @@ class Expression:
       self.bounds = {}
 
     # add label to parameters if passed
-    self.label = label
+    self.label = None
     self.add_label(label)
 
     self.t_cache = None
@@ -91,20 +90,18 @@ class Expression:
 
   # ===============================================================================================
   
-  def copy(self):
-    #return Expression(self._function, self.parameters, self.bounds)
-    result = Expression(None)
-    result.parameters = {**self.parameters}
-    result.bounds = {**self.bounds}
-    # TODO: this assignment below might not work right, will it permanently bind current 'self' reference to result method call?
-    result.eval = self.eval
-    return result
+  def copy(self, **kwargs):
+    # copy parameter guesses and bounds with labels removed and any updates from given arguments
+    strip_label = lambda p: "".join(p.split("_")[:-1]) if self.label is not None else p
+    guesses = {strip_label(k): v for k, v in self.parameters.items()}.update(kwargs.get("guesses", {}))
+    bounds = {strip_label(k): v for k, v in self.bounds.items()}.update(kwargs.get("bounds", {}))
+    return Expression(self._function, guesses, bounds, label = kwargs.get("label", None))
 
   # ===============================================================================================
 
   def add_label(self, label: str, only: list[str] = None) -> None:
     """Append underscore and label string to each parameter name."""
-    
+
     if self.label is None:
 
       # if list of restricted names supplied, check that a name matches one of the supplied prefixes
@@ -168,6 +165,32 @@ class Expression:
 
 # Type alias for Expressions or arrays/numbers that can be coerced into Expressions.
 ExpressionLike = (Expression | Callable[..., np.ndarray | np.number] | np.ndarray | np.number)
+
+# ==================================================================================================
+
+class Template(Expression):
+
+  def __init__(
+    self,
+    x: np.ndarray,
+    y: np.ndarray,
+    shift: float = 0,
+    bounds: tuple[float, float] = None,
+    label: str = None
+  ):
+    self.x = x # TODO: should copy in case x changes elsewhere in-place?
+    self.y = y
+    function = lambda t, shift=shift: np.interp(t - shift, self.x, self.y, left = 0, right = 0)
+    super().__init__(function, bounds = {"shift": bounds}, label = label)
+  
+  def copy(self, **kwargs):
+    return Template(
+      self.x,
+      self.y,
+      shift = kwargs.get("shift", list(self.parameters.values())[0]),
+      bounds = kwargs.get("bounds", list(self.bounds.values())[0]),
+      label = kwargs.get("label", None)
+    )
 
 # ==================================================================================================
 
